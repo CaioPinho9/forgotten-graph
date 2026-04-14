@@ -1,0 +1,674 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Forgotten Realms Graph Viewer</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    crossorigin=""
+  />
+
+  <style>
+    html, body, #map {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      background: #111827;
+      font-family: Arial, sans-serif;
+    }
+
+    .panel {
+      position: absolute;
+      top: 12px;
+      left: 12px;
+      z-index: 1000;
+      width: 360px;
+      max-width: calc(100vw - 24px);
+      padding: 12px;
+      border-radius: 10px;
+      background: rgba(17, 24, 39, 0.94);
+      color: white;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+    }
+
+    .panel h1 {
+      margin: 0 0 8px 0;
+      font-size: 18px;
+    }
+
+    .panel input {
+      width: 100%;
+      box-sizing: border-box;
+      margin-top: 8px;
+      padding: 8px;
+      border-radius: 6px;
+      border: none;
+      outline: none;
+    }
+
+    .panel .buttons {
+      margin-top: 8px;
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .panel button {
+      padding: 8px 10px;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+
+    .status, .info {
+      margin-top: 8px;
+      font-size: 13px;
+      line-height: 1.4;
+      white-space: pre-wrap;
+    }
+
+    .leaflet-container {
+      background: #111827;
+    }
+
+    .node-label {
+      color: white;
+      font-size: 11px;
+      text-shadow:
+        0 0 2px rgba(0,0,0,0.9),
+        0 0 4px rgba(0,0,0,0.9);
+      white-space: nowrap;
+      pointer-events: none;
+    }
+
+    .legend {
+      margin-top: 8px;
+      font-size: 12px;
+      opacity: 0.9;
+    }
+  </style>
+</head>
+<body>
+  <div class="panel">
+    <h1>Forgotten Realms Graph</h1>
+    <div id="status" class="status">Loading manifest...</div>
+
+    <input id="searchInput" type="text" placeholder="Search loaded node title..." />
+
+    <div class="buttons">
+      <button id="searchBtn">Find</button>
+      <button id="resetBtn">Reset view</button>
+      <button id="clearBtn">Clear highlight</button>
+    </div>
+
+    <div class="legend">
+      Zoom 0-4: static tiles only.<br />
+      Zoom 5+: interactive chunks load.<br />
+      Labels appear only at higher zoom.
+    </div>
+
+    <div id="coords" class="info">Cursor: -, -</div>
+    <div id="info" class="info">Waiting for data...</div>
+  </div>
+
+  <div id="map"></div>
+
+  <script
+    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    crossorigin=""
+  ></script>
+
+  <script>
+    const TILE_SIZE = 1024;
+    const STATIC_TILE_MAX_ZOOM = 4;
+    const INTERACTIVE_MIN_ZOOM = 5;
+    const LABEL_MIN_ZOOM_DEFAULT = 6;
+    const NODE_RADIUS_SCALE = 1.0;
+    const LINEAR_ZOOM_BASE_SCALE = 256;
+
+    const TILES_BASE = "./data/tiles";
+    const CHUNKS_BASE = "./data/graph_chunks";
+
+    const LinearSimpleCRS = L.extend({}, L.CRS.Simple, {
+      scale(zoom) {
+        return LINEAR_ZOOM_BASE_SCALE * (zoom + 1);
+      },
+      zoom(scale) {
+        return (scale / LINEAR_ZOOM_BASE_SCALE) - 1;
+      },
+    });
+
+    const statusEl = document.getElementById("status");
+    const coordsEl = document.getElementById("coords");
+    const infoEl = document.getElementById("info");
+    const searchInput = document.getElementById("searchInput");
+    const searchBtn = document.getElementById("searchBtn");
+    const resetBtn = document.getElementById("resetBtn");
+    const clearBtn = document.getElementById("clearBtn");
+
+    let manifest = null;
+    let boundsInfo = null;
+    let map = null;
+
+    const loadedNodeTiles = new Set();
+    const loadedEdgeTiles = new Set();
+    const nodeTileRequests = new Map();
+    const edgeTileRequests = new Map();
+
+    const nodeLayer = L.layerGroup();
+    const edgeLayer = L.layerGroup();
+    const labelLayer = L.layerGroup();
+
+    const nodeIndex = new Map();   // id -> {latlng, data, layer}
+    const labelIndex = new Map();  // id -> label marker
+    const visibleEdgeKeys = new Set();
+
+    let highlightedNodeId = null;
+    let viewUpdateToken = 0;
+
+    function getLabelMinZoom() {
+      return manifest?.label_min_zoom ?? LABEL_MIN_ZOOM_DEFAULT;
+    }
+
+    function setStatus(text) {
+      statusEl.textContent = text;
+    }
+
+    function setInfo(text) {
+      infoEl.textContent = text;
+    }
+
+    function setCoords(text) {
+      coordsEl.textContent = text;
+    }
+
+    async function fetchJson(path) {
+      const response = await fetch(path);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch ${path}`);
+      }
+      return await response.json();
+    }
+
+    function worldBoundsToLeafletBounds(bounds) {
+      return L.latLngBounds(
+        [bounds.min_y, bounds.min_x],
+        [bounds.max_y, bounds.max_x]
+      );
+    }
+
+    function getWorldCenter(bounds) {
+      return [
+        (bounds.min_y + bounds.max_y) / 2,
+        (bounds.min_x + bounds.max_x) / 2,
+      ];
+    }
+
+    function resetMapView(currentMap, bounds) {
+      const leafletBounds = worldBoundsToLeafletBounds(bounds);
+      const zoom = currentMap.getBoundsZoom(leafletBounds, false, L.point(20, 20));
+      currentMap.setView(
+        getWorldCenter(bounds),
+        zoom,
+        { animate: false }
+      );
+    }
+
+    function buildMap(bounds) {
+      const leafletBounds = worldBoundsToLeafletBounds(bounds);
+
+      const builtMap = L.map("map", {
+        crs: LinearSimpleCRS,
+        minZoom: 0,
+        maxZoom: 10,
+        zoomSnap: 0.25,
+        zoomDelta: 0.5,
+        attributionControl: false,
+        scrollWheelZoom: true,
+        wheelPxPerZoomLevel: 180,
+      });
+
+      resetMapView(builtMap, bounds);
+      builtMap.setMaxBounds(leafletBounds.pad(0.1));
+
+      const staticTiles = L.tileLayer(`${TILES_BASE}/{z}/{x}/{y}.png`, {
+        tileSize: TILE_SIZE,
+        minZoom: 0,
+        maxZoom: STATIC_TILE_MAX_ZOOM,
+        noWrap: true,
+        bounds: leafletBounds,
+      });
+
+      staticTiles.addTo(builtMap);
+      nodeLayer.addTo(builtMap);
+      edgeLayer.addTo(builtMap);
+      labelLayer.addTo(builtMap);
+
+      builtMap.on("zoomend moveend", () => {
+        updateVisibleData().catch(err => {
+          console.error(err);
+          setStatus(`Error updating view: ${err.message}`);
+        });
+      });
+
+      builtMap.on("mousemove", event => {
+        setCoords(
+          `Cursor: x=${event.latlng.lng.toFixed(2)} y=${event.latlng.lat.toFixed(2)}`
+        );
+      });
+
+      builtMap.on("mouseout", () => {
+        setCoords("Cursor: -, -");
+      });
+
+      return builtMap;
+    }
+
+    function tileKey(zoom, tx, ty, type) {
+      return `${zoom}:${tx}:${ty}:${type}`;
+    }
+
+    function getVisibleTiles(currentMap, zoom) {
+      const zInfo = manifest.zoom_levels[String(zoom)];
+      if (!zInfo) return [];
+
+      const tilesPerAxis = zInfo.tiles_per_axis;
+      const b = currentMap.getBounds();
+
+      const minX = boundsInfo.min_x;
+      const maxX = boundsInfo.max_x;
+      const minY = boundsInfo.min_y;
+      const maxY = boundsInfo.max_y;
+
+      const width = Math.max(maxX - minX, 1e-9);
+      const height = Math.max(maxY - minY, 1e-9);
+
+      function coordToTileX(x) {
+        const nx = (x - minX) / width;
+        return Math.max(0, Math.min(tilesPerAxis - 1, Math.floor(nx * tilesPerAxis)));
+      }
+
+      function coordToTileY(y) {
+        const ny = (y - minY) / height;
+        return Math.max(0, Math.min(tilesPerAxis - 1, Math.floor(ny * tilesPerAxis)));
+      }
+
+      const txMin = coordToTileX(b.getWest());
+      const txMax = coordToTileX(b.getEast());
+      const tyMin = coordToTileY(b.getSouth());
+      const tyMax = coordToTileY(b.getNorth());
+
+      const tiles = [];
+      for (let tx = Math.min(txMin, txMax); tx <= Math.max(txMin, txMax); tx++) {
+        for (let ty = Math.min(tyMin, tyMax); ty <= Math.max(tyMin, tyMax); ty++) {
+          tiles.push({ tx, ty });
+        }
+      }
+
+      return tiles;
+    }
+
+    function clearHighlightVisuals() {
+      highlightedNodeId = null;
+
+      for (const [, entry] of nodeIndex.entries()) {
+        entry.layer.setStyle({
+          color: entry.data.color,
+          fillColor: entry.data.color,
+          fillOpacity: 0.8,
+          opacity: 1.0,
+          weight: 1,
+        });
+      }
+
+      edgeLayer.eachLayer(layer => {
+        if (layer._baseStyle) {
+          layer.setStyle(layer._baseStyle);
+        }
+      });
+
+      setInfo("Highlight cleared.");
+    }
+
+    function clearInteractiveData() {
+      clearHighlightVisuals();
+      nodeLayer.clearLayers();
+      edgeLayer.clearLayers();
+      labelLayer.clearLayers();
+      nodeIndex.clear();
+      labelIndex.clear();
+      visibleEdgeKeys.clear();
+      loadedNodeTiles.clear();
+      loadedEdgeTiles.clear();
+      nodeTileRequests.clear();
+      edgeTileRequests.clear();
+      setInfo("Interactive graph cleared.");
+    }
+
+    function applyHighlight(nodeId) {
+      highlightedNodeId = nodeId;
+      const neighbors = new Set();
+
+      edgeLayer.eachLayer(layer => {
+        const source = layer._sourceId;
+        const target = layer._targetId;
+        const connected = source === nodeId || target === nodeId;
+
+        if (connected) {
+          neighbors.add(source);
+          neighbors.add(target);
+          layer.setStyle({
+            color: "rgba(255,255,255,0.85)",
+            weight: 2,
+            opacity: 0.9,
+          });
+        } else {
+          layer.setStyle({
+            color: "rgba(120,120,120,0.10)",
+            weight: 1,
+            opacity: 0.15,
+          });
+        }
+      });
+
+      for (const [id, entry] of nodeIndex.entries()) {
+        if (id === nodeId) {
+          entry.layer.setStyle({
+            color: "#ffffff",
+            fillColor: "#ef4444",
+            fillOpacity: 1.0,
+            opacity: 1.0,
+            weight: 2,
+          });
+        } else if (neighbors.has(id)) {
+          entry.layer.setStyle({
+            color: "#ffffff",
+            fillColor: "#10b981",
+            fillOpacity: 0.95,
+            opacity: 1.0,
+            weight: 1.5,
+          });
+        } else {
+          entry.layer.setStyle({
+            color: entry.data.color,
+            fillColor: entry.data.color,
+            fillOpacity: 0.20,
+            opacity: 0.3,
+            weight: 1,
+          });
+        }
+      }
+
+      const entry = nodeIndex.get(nodeId);
+      if (entry) {
+        const d = entry.data;
+        const categoriesText = d.categories && d.categories.length
+          ? d.categories.join(", ")
+          : "None";
+        setInfo(
+          `Node: ${d.id}\n` +
+          `Cluster: ${d.cluster_id}\n` +
+          `Categories: ${categoriesText}\n` +
+          `In-degree: ${d.in_degree}\n` +
+          `Out-degree: ${d.out_degree}`
+        );
+      }
+    }
+
+    function makeNodeLayer(node) {
+      const latlng = L.latLng(node.y, node.x);
+      const radius = Math.max(1.5, node.size * NODE_RADIUS_SCALE);
+
+      const circle = L.circleMarker(latlng, {
+        radius,
+        color: node.color,
+        fillColor: node.color,
+        fillOpacity: 0.8,
+        opacity: 1.0,
+        weight: 1,
+      });
+
+      circle.on("click", () => {
+        applyHighlight(node.id);
+      });
+
+      nodeIndex.set(node.id, {
+        latlng,
+        data: node,
+        layer: circle,
+      });
+
+      return circle;
+    }
+
+    function maybeAddLabel(node) {
+      if (!node.label) return;
+      if (labelIndex.has(node.id)) return;
+
+      const marker = L.marker([node.y, node.x], {
+        interactive: false,
+        icon: L.divIcon({
+          className: "node-label",
+          html: node.label,
+          iconSize: [0, 0],
+        }),
+      });
+
+      labelIndex.set(node.id, marker);
+      labelLayer.addLayer(marker);
+    }
+
+    function addEdge(sourceId, targetId) {
+      const source = nodeIndex.get(sourceId);
+      const target = nodeIndex.get(targetId);
+
+      if (!source || !target) return;
+
+      const key = `${sourceId}→${targetId}`;
+      if (visibleEdgeKeys.has(key)) return;
+      visibleEdgeKeys.add(key);
+
+      const line = L.polyline(
+        [source.latlng, target.latlng],
+        {
+          color: "rgba(120,120,120,0.18)",
+          weight: 1,
+          opacity: 0.35,
+        }
+      );
+
+      line._sourceId = sourceId;
+      line._targetId = targetId;
+      line._baseStyle = {
+        color: "rgba(120,120,120,0.18)",
+        weight: 1,
+        opacity: 0.35,
+      };
+
+      edgeLayer.addLayer(line);
+    }
+
+    async function loadNodeTile(zoom, tx, ty, token) {
+      const key = tileKey(zoom, tx, ty, "nodes");
+      if (loadedNodeTiles.has(key)) return;
+
+      const path = `${CHUNKS_BASE}/z${zoom}/nodes_${tx}_${ty}.json`;
+      let request = nodeTileRequests.get(key);
+      if (!request) {
+        request = fetchJson(path)
+          .catch(() => null)
+          .finally(() => {
+            nodeTileRequests.delete(key);
+          });
+        nodeTileRequests.set(key, request);
+      }
+
+      const nodes = await request;
+      if (!nodes || token !== viewUpdateToken) return;
+      if (loadedNodeTiles.has(key)) return;
+
+      loadedNodeTiles.add(key);
+
+      for (const node of nodes) {
+        if (!nodeIndex.has(node.id)) {
+          const layer = makeNodeLayer(node);
+          nodeLayer.addLayer(layer);
+        }
+
+        if (map.getZoom() >= getLabelMinZoom()) {
+          maybeAddLabel(node);
+        }
+      }
+    }
+
+    async function loadEdgeTile(zoom, tx, ty, token) {
+      const key = tileKey(zoom, tx, ty, "edges");
+      if (loadedEdgeTiles.has(key)) return;
+
+      const path = `${CHUNKS_BASE}/z${zoom}/edges_${tx}_${ty}.json`;
+      let request = edgeTileRequests.get(key);
+      if (!request) {
+        request = fetchJson(path)
+          .catch(() => null)
+          .finally(() => {
+            edgeTileRequests.delete(key);
+          });
+        edgeTileRequests.set(key, request);
+      }
+
+      const edges = await request;
+      if (!edges || token !== viewUpdateToken) return;
+      if (loadedEdgeTiles.has(key)) return;
+
+      loadedEdgeTiles.add(key);
+
+      for (const edge of edges) {
+        addEdge(edge.source, edge.target);
+      }
+    }
+
+    async function updateVisibleData() {
+      const token = ++viewUpdateToken;
+      const rawZoom = map.getZoom();
+
+      if (rawZoom < INTERACTIVE_MIN_ZOOM) {
+        clearInteractiveData();
+        setStatus(`Zoom ${rawZoom.toFixed(2)}\nStatic tiles only`);
+        return;
+      }
+
+      const availableChunkZooms = Object.keys(manifest.zoom_levels).map(Number);
+      const maxChunkZoom = Math.max(...availableChunkZooms);
+      const minChunkZoom = Math.min(...availableChunkZooms);
+      const chunkZoom = Math.max(
+        minChunkZoom,
+        Math.min(maxChunkZoom, Math.round(rawZoom))
+      );
+      const tiles = getVisibleTiles(map, chunkZoom);
+
+      setStatus(
+        `Zoom ${rawZoom.toFixed(2)}\n` +
+        `Interactive chunk zoom: ${chunkZoom}\n` +
+        `Visible tiles: ${tiles.length}\n` +
+        `Loaded nodes: ${nodeIndex.size}\n` +
+        `Loaded edges: ${visibleEdgeKeys.size}`
+      );
+
+      for (const { tx, ty } of tiles) {
+        await loadNodeTile(chunkZoom, tx, ty, token);
+        if (token !== viewUpdateToken) return;
+      }
+
+      for (const { tx, ty } of tiles) {
+        await loadEdgeTile(chunkZoom, tx, ty, token);
+        if (token !== viewUpdateToken) return;
+      }
+
+      if (token !== viewUpdateToken) return;
+
+      if (rawZoom >= getLabelMinZoom()) {
+        for (const [, entry] of nodeIndex.entries()) {
+          entry.data.label = entry.data.label ?? entry.data.id;
+          maybeAddLabel(entry.data);
+        }
+      } else {
+        labelLayer.clearLayers();
+        labelIndex.clear();
+      }
+
+      if (highlightedNodeId) {
+        applyHighlight(highlightedNodeId);
+      }
+    }
+
+    function findMatchingNode(query) {
+      const q = query.trim().toLowerCase();
+      if (!q) return null;
+
+      for (const [id, entry] of nodeIndex.entries()) {
+        if (id.toLowerCase() === q) return entry;
+      }
+
+      for (const [id, entry] of nodeIndex.entries()) {
+        if (id.toLowerCase().includes(q)) return entry;
+      }
+
+      return null;
+    }
+
+    function focusNode(entry) {
+      const targetZoom = Math.max(map.getZoom(), manifest.label_min_zoom ?? LABEL_MIN_ZOOM_DEFAULT);
+      map.setView(entry.latlng, targetZoom, { animate: true });
+      applyHighlight(entry.data.id);
+    }
+
+    async function bootstrap() {
+      manifest = await fetchJson(`${CHUNKS_BASE}/manifest.json`);
+      boundsInfo = manifest.bounds;
+
+      map = buildMap(boundsInfo);
+
+      searchBtn.addEventListener("click", async () => {
+        const query = searchInput.value.trim();
+        if (!query) return;
+
+        let match = findMatchingNode(query);
+
+        if (!match) {
+          setStatus(`Searching loaded data for "${query}"...`);
+          map.setZoom(Math.max(map.getZoom(), manifest.label_min_zoom ?? LABEL_MIN_ZOOM_DEFAULT));
+          await updateVisibleData();
+          match = findMatchingNode(query);
+        }
+
+        if (match) {
+          focusNode(match);
+        } else {
+          setInfo(`Node not found in loaded chunks: ${query}`);
+        }
+      });
+
+      resetBtn.addEventListener("click", () => {
+        resetMapView(map, boundsInfo);
+      });
+
+      clearBtn.addEventListener("click", () => {
+        clearHighlightVisuals();
+      });
+
+      await updateVisibleData();
+      setInfo("Ready. Zoom in to load interactive chunks.");
+    }
+
+    bootstrap().catch(err => {
+      console.error(err);
+      setStatus(`Error: ${err.message}`);
+    });
+  </script>
+</body>
+</html>
