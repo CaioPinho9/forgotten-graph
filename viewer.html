@@ -51,6 +51,18 @@
             outline: none;
         }
 
+        .panel select {
+            width: 100%;
+            box-sizing: border-box;
+            margin-top: 8px;
+            padding: 8px;
+            border-radius: 6px;
+            border: none;
+            outline: none;
+            background: white;
+            color: #111827;
+        }
+
         .panel .buttons {
             margin-top: 8px;
             display: flex;
@@ -97,6 +109,15 @@
             font-size: 12px;
             opacity: 0.9;
         }
+
+        .menu-section {
+            margin-top: 10px;
+        }
+
+        .menu-section-title {
+            font-size: 12px;
+            opacity: 0.9;
+        }
     </style>
 </head>
 <body>
@@ -108,15 +129,30 @@
 
     <div class="buttons">
         <button id="searchBtn">Find</button>
-        <button id="highlightCategoryBtn">Highlight Category</button>
+        <button id="highlightClusterBtn">Highlight Cluster</button>
         <button id="resetBtn">Reset view</button>
-        <button id="clearBtn">Clear highlight</button>
         <button id="toggleEdgesBtn">Edges: On</button>
     </div>
 
+    <div class="menu-section">
+        <div class="menu-section-title">Highlight By Category</div>
+        <select id="categoryMenu" size="6"></select>
+        <div class="buttons">
+            <button id="highlightCategoryMenuBtn">Highlight Category</button>
+        </div>
+    </div>
+
+    <div class="menu-section">
+        <div class="menu-section-title">Highlight By Cluster</div>
+        <select id="clusterMenu" size="6"></select>
+        <div class="buttons">
+            <button id="highlightClusterMenuBtn">Highlight Cluster</button>
+        </div>
+    </div>
+
     <div class="legend">
-        Zoom 0-6: static node tiles + static edge tiles.<br/>
-        Zoom 7+: interactive node chunks load.<br/>
+        <span id="legendStaticZooms"></span><br/>
+        <span id="legendInteractiveZooms"></span><br/>
         Highlighted neighborhood stays visible when zooming back out.
     </div>
 
@@ -142,10 +178,15 @@
     const infoEl = document.getElementById("info");
     const searchInput = document.getElementById("searchInput");
     const searchBtn = document.getElementById("searchBtn");
-    const highlightCategoryBtn = document.getElementById("highlightCategoryBtn");
+    const highlightClusterBtn = document.getElementById("highlightClusterBtn");
+    const categoryMenu = document.getElementById("categoryMenu");
+    const clusterMenu = document.getElementById("clusterMenu");
+    const highlightCategoryMenuBtn = document.getElementById("highlightCategoryMenuBtn");
+    const highlightClusterMenuBtn = document.getElementById("highlightClusterMenuBtn");
     const resetBtn = document.getElementById("resetBtn");
-    const clearBtn = document.getElementById("clearBtn");
     const toggleEdgesBtn = document.getElementById("toggleEdgesBtn");
+    const legendStaticZoomsEl = document.getElementById("legendStaticZooms");
+    const legendInteractiveZoomsEl = document.getElementById("legendInteractiveZooms");
 
     let manifest = null;
     let zoomConfig = null;
@@ -158,7 +199,7 @@
     let preservedHighlightGraph = null; // { nodes: Map<string, object>, edges: Array<{source,target}> }
     let highlightedNodeId = null;
     let highlightedNeighborIds = new Set();
-    let highlightedCategoryName = null;
+    let highlightedClusterId = null;
     let searchIndex = [];
 
     const loadedNodeTiles = new Set();
@@ -182,6 +223,7 @@
     let viewUpdateFrame = null;
     let currentInteractiveZoom = null;
     let currentInteractiveTileKeys = new Set();
+    let isMapDragging = false;
 
     function getStaticTileMaxZoom() {
         return zoomConfig?.static_tile_max_zoom ?? manifest?.zoom_config?.static_tile_max_zoom ?? 5;
@@ -237,6 +279,20 @@
         coordsEl.textContent = text;
     }
 
+    function formatClusterText(clusterName, clusterId) {
+        return clusterName ? `${clusterName} (#${clusterId})` : `#${clusterId}`;
+    }
+
+    function updateLegendText() {
+        const staticMaxZoom = getStaticTileMaxZoom();
+        const interactiveMinZoom = getInteractiveMinZoom();
+
+        legendStaticZoomsEl.textContent =
+            `Zoom 0-${staticMaxZoom}: static node tiles + static edge tiles.`;
+        legendInteractiveZoomsEl.textContent =
+            `Zoom ${interactiveMinZoom}+: interactive node chunks load.`;
+    }
+
     async function fetchJson(path) {
         const r = await fetch(path);
         if (!r.ok) throw new Error(`Failed to fetch ${path}`);
@@ -265,7 +321,7 @@
     }
 
     function edgeOpacityForNodeSizes(sourceSize, targetSize, highlighted = false) {
-        if (highlighted) return 0.95;
+        if (highlighted) return 0.55;
 
         const maxSize = Math.max(Number(sourceSize) || 0, Number(targetSize) || 0, 0);
         const opacity = 0.34 + Math.log1p(maxSize) * 0.12;
@@ -282,7 +338,7 @@
         };
         return {
             color: `rgb(${mid.r}, ${mid.g}, ${mid.b})`,
-            weight: highlighted ? 2 : 1,
+            weight: highlighted ? 1 : 1,
             opacity: edgeOpacityForNodeSizes(sourceSize, targetSize, highlighted),
         };
     }
@@ -394,7 +450,29 @@
 
         updateStaticTileVisibility();
 
-        builtMap.on("drag move zoom", scheduleViewUpdate);
+        builtMap.on("move", scheduleViewUpdate);
+        builtMap.on("zoom", scheduleViewUpdate);
+        builtMap.on("moveend", scheduleViewUpdate);
+        builtMap.on("zoomend", scheduleViewUpdate);
+        builtMap.on("dragstart", () => {
+            isMapDragging = true;
+        });
+        builtMap.on("dragend", () => {
+            requestAnimationFrame(() => {
+                isMapDragging = false;
+            });
+        });
+        builtMap.on("click", e => {
+            if (isMapDragging) return;
+
+            const target = e.originalEvent?.target;
+            if (target?.closest?.(".leaflet-interactive")) return;
+            if (target?.closest?.(".panel")) return;
+            if (!preservedHighlightGraph) return;
+
+            clearHighlightVisuals();
+            scheduleViewUpdate();
+        });
 
         builtMap.on("mousemove", e => {
             setCoords(`Cursor: x=${e.latlng.lng.toFixed(2)} y=${e.latlng.lat.toFixed(2)}`);
@@ -481,7 +559,7 @@
             return {
                 radius: Math.max(1.5, node.size * NODE_RADIUS_SCALE),
                 color: "#ffffff",
-                fillColor: "#ef4444",
+                fillColor: node.color,
                 fillOpacity: 1.0,
                 opacity: 1.0,
                 weight: 2,
@@ -492,8 +570,8 @@
             return {
                 radius: Math.max(1.5, node.size * NODE_RADIUS_SCALE),
                 color: "#ffffff",
-                fillColor: "#10b981",
-                fillOpacity: 0.95,
+                fillColor: node.color,
+                fillOpacity: 0.9,
                 opacity: 1.0,
                 weight: 1.5,
             };
@@ -584,10 +662,9 @@
     function clearHighlightVisuals() {
         highlightedNodeId = null;
         highlightedNeighborIds = new Set();
-        highlightedCategoryName = null;
+        highlightedClusterId = null;
         preservedHighlightGraph = null;
         clearHighlightOverlay();
-        setInfo("Highlight cleared.");
     }
 
     function removeVisibleNodeById(nodeId) {
@@ -636,17 +713,61 @@
         );
     }
 
-    function setCategoryInfo(nodeId, categoryName, count) {
+    function setClusterInfo(nodeId, clusterName, clusterId, count) {
         const entry = getNodeEntry(nodeId);
         if (!entry) return;
         const pageUrl = pageUrlFromTitle(entry.data.id);
+        const clusterText = formatClusterText(clusterName, clusterId);
 
         setInfoHtml(
             `Node: ${escapeHtml(entry.data.id)}<br>` +
             `URL: <a href="${pageUrl}" target="_blank" rel="noopener noreferrer">${escapeHtml(pageUrl)}</a><br>` +
+            `Cluster highlight: ${escapeHtml(clusterText)}<br>` +
+            `Matching nodes: ${escapeHtml(count)}`
+        );
+    }
+
+    function setCategoryMenuInfo(categoryName, count) {
+        setInfoHtml(
             `Category highlight: ${escapeHtml(categoryName)}<br>` +
             `Matching nodes: ${escapeHtml(count)}`
         );
+    }
+
+    function setClusterMenuInfo(clusterName, clusterId, count) {
+        setInfoHtml(
+            `Cluster highlight: ${escapeHtml(formatClusterText(clusterName, clusterId))}<br>` +
+            `Matching nodes: ${escapeHtml(count)}`
+        );
+    }
+
+    function clearExistingHighlight(keepSelectedNode = true) {
+        clearHighlightOverlay();
+        highlightedNeighborIds = new Set();
+        preservedHighlightGraph = null;
+        highlightedClusterId = null;
+        if (!keepSelectedNode) {
+            highlightedNodeId = null;
+        }
+    }
+
+    function applyNodeSetHighlight(graphNodes, focusNodeId = null) {
+        clearExistingHighlight(focusNodeId !== null);
+
+        const neighborIds = new Set();
+        for (const nodeId of graphNodes.keys()) {
+            if (nodeId !== focusNodeId) {
+                neighborIds.add(nodeId);
+            }
+        }
+
+        highlightedNodeId = focusNodeId;
+        highlightedNeighborIds = neighborIds;
+        preservedHighlightGraph = {
+            nodes: graphNodes,
+            edges: [],
+        };
+        renderHighlightOverlay();
     }
 
     function pageUrlFromTitle(title) {
@@ -736,7 +857,7 @@
 
         highlightedNodeId = nodeId;
         highlightedNeighborIds = graph.neighborIds;
-        highlightedCategoryName = null;
+        highlightedClusterId = null;
         preservedHighlightGraph = {
             nodes: graph.nodes,
             edges: graph.edges,
@@ -744,7 +865,7 @@
         setHighlightInfo(nodeId);
     }
 
-    function highlightCategoryForCurrentNode() {
+    function highlightClusterForCurrentNode() {
         if (!highlightedNodeId) {
             setInfo("Select or find a node first.");
             return;
@@ -756,32 +877,117 @@
             return;
         }
 
-        const categoryName = entry.data.categories?.[0];
+        const clusterId = entry.data.cluster_id;
+        if (clusterId === null || clusterId === undefined) {
+            setInfo(`Node has no cluster: ${entry.data.id}`);
+            return;
+        }
+
+        const clusterName = entry.data.cluster_name || null;
+
+        const graphNodes = new Map();
+
+        for (const node of searchIndex) {
+            if (node.cluster_id !== clusterId) continue;
+            graphNodes.set(node.id, node);
+        }
+
+        graphNodes.set(highlightedNodeId, entry.data);
+        highlightedClusterId = clusterId;
+        applyNodeSetHighlight(graphNodes, highlightedNodeId);
+        setClusterInfo(highlightedNodeId, clusterName, clusterId, graphNodes.size);
+    }
+
+    function highlightCategoryByMenu() {
+        const categoryName = categoryMenu.value;
         if (!categoryName) {
-            setInfo(`Node has no category: ${entry.data.id}`);
+            setInfo("Select a category first.");
             return;
         }
 
         const graphNodes = new Map();
-        const neighborIds = new Set();
-
         for (const node of searchIndex) {
-            if (!(node.categories || []).includes(categoryName)) continue;
-            graphNodes.set(node.id, node);
-            if (node.id !== highlightedNodeId) {
-                neighborIds.add(node.id);
+            if ((node.categories || []).includes(categoryName)) {
+                graphNodes.set(node.id, node);
             }
         }
 
-        graphNodes.set(highlightedNodeId, entry.data);
-        highlightedCategoryName = categoryName;
-        highlightedNeighborIds = neighborIds;
-        preservedHighlightGraph = {
-            nodes: graphNodes,
-            edges: [],
-        };
-        setCategoryInfo(highlightedNodeId, categoryName, graphNodes.size);
-        renderHighlightOverlay();
+        if (graphNodes.size === 0) {
+            setInfo(`No nodes found for category: ${categoryName}`);
+            return;
+        }
+
+        applyNodeSetHighlight(graphNodes, null);
+        setCategoryMenuInfo(categoryName, graphNodes.size);
+    }
+
+    function highlightClusterByMenu() {
+        const rawClusterId = clusterMenu.value;
+        if (!rawClusterId) {
+            setInfo("Select a cluster first.");
+            return;
+        }
+
+        const clusterId = Number(rawClusterId);
+        const graphNodes = new Map();
+        let clusterName = null;
+
+        for (const node of searchIndex) {
+            if (node.cluster_id !== clusterId) continue;
+            graphNodes.set(node.id, node);
+            clusterName = clusterName || node.cluster_name || null;
+        }
+
+        if (graphNodes.size === 0) {
+            setInfo(`No nodes found for cluster: ${rawClusterId}`);
+            return;
+        }
+
+        highlightedClusterId = clusterId;
+        applyNodeSetHighlight(graphNodes, null);
+        setClusterMenuInfo(clusterName, clusterId, graphNodes.size);
+    }
+
+    function populateHighlightMenus() {
+        const categoryCounts = new Map();
+        const clusterCounts = new Map();
+
+        for (const node of searchIndex) {
+            for (const category of node.categories || []) {
+                categoryCounts.set(category, (categoryCounts.get(category) || 0) + 1);
+            }
+
+            const clusterId = node.cluster_id;
+            if (clusterId === null || clusterId === undefined) continue;
+            const existing = clusterCounts.get(clusterId) || {
+                name: node.cluster_name || null,
+                count: 0,
+            };
+            existing.name = existing.name || node.cluster_name || null;
+            existing.count += 1;
+            clusterCounts.set(clusterId, existing);
+        }
+
+        categoryMenu.innerHTML = "";
+        clusterMenu.innerHTML = "";
+
+        for (const [categoryName, count] of Array.from(categoryCounts.entries()).sort((a, b) => a[0].localeCompare(b[0]))) {
+            const option = document.createElement("option");
+            option.value = categoryName;
+            option.textContent = `${categoryName} (${count})`;
+            categoryMenu.appendChild(option);
+        }
+
+        for (const [clusterId, meta] of Array.from(clusterCounts.entries()).sort((a, b) => {
+            const left = formatClusterText(a[1].name, a[0]);
+            const right = formatClusterText(b[1].name, b[0]);
+            return left.localeCompare(right);
+        })) {
+            const option = document.createElement("option");
+            option.value = String(clusterId);
+            option.textContent = `${formatClusterText(meta.name, clusterId)} (${meta.count})`;
+            clusterMenu.appendChild(option);
+        }
     }
 
     function getEdgeEndpointPoints(fromLatLng, toLatLng, sourceRadiusPx = 0, targetRadiusPx = 0) {
@@ -869,7 +1075,7 @@
             arrow = L.polygon(arrowPoints, {
                 color: style.color,
                 fillColor: style.color,
-                fillOpacity: style.opacity,
+                fillOpacity: highlighted ? Math.min(style.opacity, 0.45) : style.opacity,
                 opacity: style.opacity,
                 weight: 1,
                 interactive: false,
@@ -893,7 +1099,7 @@
 
     function renderHighlightOverlay() {
         clearHighlightOverlay();
-        if (!preservedHighlightGraph || !highlightedNodeId) return;
+        if (!preservedHighlightGraph) return;
 
         for (const [, node] of preservedHighlightGraph.nodes.entries()) {
             addHighlightNode(node);
@@ -913,7 +1119,7 @@
         }
     }
 
-    async function loadNodeTile(zoom, tx, ty, token) {
+    async function loadNodeTile(zoom, tx, ty) {
         const key = tileKey(zoom, tx, ty);
         if (loadedNodeTiles.has(key)) return;
 
@@ -927,6 +1133,7 @@
 
         const nodes = await req;
         if (!nodes) return;
+
         if (zoom !== currentInteractiveZoom || !currentInteractiveTileKeys.has(key)) return;
         if (loadedNodeTiles.has(key)) return;
 
@@ -939,10 +1146,13 @@
                 addLabelToLayer(labelIndex, labelLayer, node);
             }
         }
+
+        if (preservedHighlightGraph) {
+            renderHighlightOverlay();
+        }
     }
 
     async function updateVisibleData() {
-        const token = ++viewUpdateToken;
         const rawZoom = map.getZoom();
         const isInteractive = rawZoom >= getInteractiveMinZoom();
 
@@ -967,10 +1177,17 @@
         const tiles = getVisibleTiles(map, chunkZoom);
         const desiredTileKeys = new Set(tiles.map(({tx, ty}) => tileKey(chunkZoom, tx, ty)));
 
+        const zoomChanged = currentInteractiveZoom !== chunkZoom;
         currentInteractiveZoom = chunkZoom;
         currentInteractiveTileKeys = desiredTileKeys;
 
-        pruneHiddenTiles(desiredTileKeys);
+        if (zoomChanged) {
+            clearVisibleInteractiveData();
+            currentInteractiveZoom = chunkZoom;
+            currentInteractiveTileKeys = desiredTileKeys;
+        } else {
+            pruneHiddenTiles(desiredTileKeys);
+        }
 
         setStatus(
             `Zoom ${rawZoom.toFixed(2)}\n` +
@@ -978,17 +1195,11 @@
             `Visible tiles: ${tiles.length}`
         );
 
-        await Promise.all(tiles.map(({tx, ty}) => loadNodeTile(chunkZoom, tx, ty, token)));
-        if (token !== viewUpdateToken) return;
+        for (const {tx, ty} of tiles) {
+            loadNodeTile(chunkZoom, tx, ty);
+        }
 
-        pruneHiddenTiles(desiredTileKeys);
-
-        if (rawZoom >= getLabelMinZoom()) {
-            for (const [, entry] of nodeIndex.entries()) {
-                entry.data.label = entry.data.label ?? entry.data.id;
-                addLabelToLayer(labelIndex, labelLayer, entry.data);
-            }
-        } else {
+        if (rawZoom < getLabelMinZoom()) {
             clearVisibleLabels();
         }
 
@@ -1058,6 +1269,8 @@
         zoomConfig = await fetchJson("./zoom_config.json");
         manifest = await fetchJson(`${CHUNKS_BASE}/manifest.json`);
         searchIndex = await fetchJson(`${CHUNKS_BASE}/search_index.json`).catch(() => []);
+        populateHighlightMenus();
+        updateLegendText();
         boundsInfo = manifest.bounds;
         map = buildMap(boundsInfo);
 
@@ -1068,17 +1281,20 @@
             await focusNodeBySearch(query);
         });
 
-        highlightCategoryBtn.addEventListener("click", () => {
-            highlightCategoryForCurrentNode();
+        highlightClusterBtn.addEventListener("click", () => {
+            highlightClusterForCurrentNode();
+        });
+
+        highlightCategoryMenuBtn.addEventListener("click", () => {
+            highlightCategoryByMenu();
+        });
+
+        highlightClusterMenuBtn.addEventListener("click", () => {
+            highlightClusterByMenu();
         });
 
         resetBtn.addEventListener("click", () => {
             resetMapView(map, boundsInfo);
-        });
-
-        clearBtn.addEventListener("click", () => {
-            clearHighlightVisuals();
-            scheduleViewUpdate();
         });
 
         toggleEdgesBtn.addEventListener("click", () => {
@@ -1088,7 +1304,6 @@
         });
 
         await updateVisibleData();
-        setInfo("Ready. Zoom in to load interactive chunks.");
     }
 
     bootstrap().catch(err => {
