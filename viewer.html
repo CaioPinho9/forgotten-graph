@@ -555,8 +555,9 @@
     async function updateVisibleData() {
       const token = ++viewUpdateToken;
       const rawZoom = map.getZoom();
+      const roundedZoom = Math.round(rawZoom);
 
-      if (rawZoom < INTERACTIVE_MIN_ZOOM) {
+      if (roundedZoom < INTERACTIVE_MIN_ZOOM) {
         clearInteractiveData();
         setStatus(`Zoom ${rawZoom.toFixed(2)}\nStatic tiles only`);
         return;
@@ -567,7 +568,7 @@
       const minChunkZoom = Math.min(...availableChunkZooms);
       const chunkZoom = Math.max(
         minChunkZoom,
-        Math.min(maxChunkZoom, Math.round(rawZoom))
+        Math.min(maxChunkZoom, roundedZoom)
       );
       const tiles = getVisibleTiles(map, chunkZoom);
 
