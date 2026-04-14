@@ -10,7 +10,7 @@ BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 OUTPUT_DIR = DATA_DIR / "tiles"
 
-STATIC_TILE_MAX_ZOOM = 4
+STATIC_TILE_MAX_ZOOM = 6
 TILE_ZOOMS = list(range(STATIC_TILE_MAX_ZOOM + 1))
 TILE_SIZE = 1024
 

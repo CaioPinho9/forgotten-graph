@@ -4,15 +4,15 @@ import time
 from collections import defaultdict
 from pathlib import Path
 
-from db import init_db, load_edges_for_chunks, load_nodes_layout, load_page_categories
+from db import init_db, load_cluster_metadata, load_edges_for_chunks, load_nodes_layout, load_page_categories
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 OUTPUT_DIR = DATA_DIR / "graph_chunks"
 
 ZOOM_LEVELS = [0, 1, 2, 3, 4, 5, 6, 7, 8]
-INTERACTIVE_MIN_ZOOM = 5
-LABEL_MIN_ZOOM = 6
+INTERACTIVE_MIN_ZOOM = 7
+LABEL_MIN_ZOOM = 8
 
 MIN_IN_DEGREE_BY_ZOOM = {
     0: 999_999,
@@ -20,8 +20,8 @@ MIN_IN_DEGREE_BY_ZOOM = {
     2: 999_999,
     3: 999_999,
     4: 999_999,
-    5: 32,
-    6: 16,
+    5: 999_999,
+    6: 999_999,
     7: 6,
     8: 0,
 }
@@ -58,8 +58,14 @@ def get_tile_xy(x: float, y: float, bounds: tuple[float, float, float, float], z
     return tx, ty
 
 
-def make_node_payload(node: dict, page_categories: dict[str, list[str]], include_label: bool) -> dict:
+def make_node_payload(
+    node: dict,
+    page_categories: dict[str, list[str]],
+    cluster_metadata: dict[int, dict[str, str | None]],
+    include_label: bool,
+) -> dict:
     categories = page_categories.get(node["page_title"], [])
+    cluster_info = cluster_metadata.get(node["cluster_id"], {})
     payload = {
         "id": node["page_title"],
         "x": node["x"],
@@ -67,6 +73,7 @@ def make_node_payload(node: dict, page_categories: dict[str, list[str]], include
         "size": node["node_size"],
         "color": node["cluster_color"],
         "cluster_id": node["cluster_id"],
+        "cluster_name": cluster_info.get("cluster_name"),
         "in_degree": node["in_degree"],
         "out_degree": node["out_degree"],
         "categories": categories,
@@ -113,6 +120,10 @@ def build_spatial_chunks():
     page_categories = load_page_categories()
     print(f"Loaded categories for {len(page_categories)} pages")
 
+    print("Loading cluster metadata from DB...")
+    cluster_metadata = load_cluster_metadata()
+    print(f"Loaded metadata for {len(cluster_metadata)} clusters")
+
     print("Loading edges from DB...")
     edges = load_edges_for_chunks(discovered_only=True)
     print(f"Filtered edges: {len(edges)}")
@@ -148,7 +159,12 @@ def build_spatial_chunks():
 
             tx, ty = get_tile_xy(node["x"], node["y"], bounds, zoom)
             tiles[(tx, ty)].append(
-                make_node_payload(node, page_categories, include_label=include_label)
+                make_node_payload(
+                    node,
+                    page_categories,
+                    cluster_metadata,
+                    include_label=include_label,
+                )
             )
 
         zoom_dir = OUTPUT_DIR / f"z{zoom}"

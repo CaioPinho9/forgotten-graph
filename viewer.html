@@ -107,8 +107,8 @@
     </div>
 
     <div class="legend">
-      Zoom 0-4: static tiles only.<br />
-      Zoom 5+: interactive chunks load.<br />
+      Zoom 0-6: static tiles only.<br />
+      Zoom 7+: interactive chunks load.<br />
       Labels appear only at higher zoom.
     </div>
 
@@ -125,9 +125,9 @@
 
   <script>
     const TILE_SIZE = 1024;
-    const STATIC_TILE_MAX_ZOOM = 4;
-    const INTERACTIVE_MIN_ZOOM = 5;
-    const LABEL_MIN_ZOOM_DEFAULT = 6;
+    const STATIC_TILE_MAX_ZOOM = 6;
+    const INTERACTIVE_MIN_ZOOM = 7;
+    const LABEL_MIN_ZOOM_DEFAULT = 8;
     const NODE_RADIUS_SCALE = 1.0;
     const LINEAR_ZOOM_BASE_SCALE = 256;
 
@@ -407,12 +407,15 @@
       const entry = nodeIndex.get(nodeId);
       if (entry) {
         const d = entry.data;
+        const clusterText = d.cluster_name
+          ? `${d.cluster_name} (#${d.cluster_id})`
+          : `${d.cluster_id}`;
         const categoriesText = d.categories && d.categories.length
           ? d.categories.join(", ")
           : "None";
         setInfo(
           `Node: ${d.id}\n` +
-          `Cluster: ${d.cluster_id}\n` +
+          `Cluster: ${clusterText}\n` +
           `Categories: ${categoriesText}\n` +
           `In-degree: ${d.in_degree}\n` +
           `Out-degree: ${d.out_degree}`
