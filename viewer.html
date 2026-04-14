@@ -129,19 +129,9 @@
     const INTERACTIVE_MIN_ZOOM = 7;
     const LABEL_MIN_ZOOM_DEFAULT = 8;
     const NODE_RADIUS_SCALE = 1.0;
-    const LINEAR_ZOOM_BASE_SCALE = 256;
 
     const TILES_BASE = "./data/tiles";
     const CHUNKS_BASE = "./data/graph_chunks";
-
-    const LinearSimpleCRS = L.extend({}, L.CRS.Simple, {
-      scale(zoom) {
-        return LINEAR_ZOOM_BASE_SCALE * (zoom + 1);
-      },
-      zoom(scale) {
-        return (scale / LINEAR_ZOOM_BASE_SCALE) - 1;
-      },
-    });
 
     const statusEl = document.getElementById("status");
     const coordsEl = document.getElementById("coords");
@@ -154,6 +144,7 @@
     let manifest = null;
     let boundsInfo = null;
     let map = null;
+    let staticTiles = null;
 
     const loadedNodeTiles = new Set();
     const loadedEdgeTiles = new Set();
@@ -223,7 +214,7 @@
       const leafletBounds = worldBoundsToLeafletBounds(bounds);
 
       const builtMap = L.map("map", {
-        crs: LinearSimpleCRS,
+        crs: L.CRS.Simple,
         minZoom: 0,
         maxZoom: 10,
         zoomSnap: 0.25,
@@ -236,10 +227,11 @@
       resetMapView(builtMap, bounds);
       builtMap.setMaxBounds(leafletBounds.pad(0.1));
 
-      const staticTiles = L.tileLayer(`${TILES_BASE}/{z}/{x}/{y}.png`, {
+      staticTiles = L.tileLayer(`${TILES_BASE}/{z}/{x}/{y}.png`, {
         tileSize: TILE_SIZE,
         minZoom: 0,
-        maxZoom: STATIC_TILE_MAX_ZOOM,
+        maxNativeZoom: STATIC_TILE_MAX_ZOOM,
+        maxZoom: 10,
         noWrap: true,
         bounds: leafletBounds,
       });
@@ -558,20 +550,23 @@
     async function updateVisibleData() {
       const token = ++viewUpdateToken;
       const rawZoom = map.getZoom();
-      const roundedZoom = Math.round(rawZoom);
+      const chunkCandidateZoom = Math.floor(rawZoom);
 
-      if (roundedZoom < INTERACTIVE_MIN_ZOOM) {
+      if (rawZoom < INTERACTIVE_MIN_ZOOM) {
+        staticTiles?.setOpacity(1);
         clearInteractiveData();
         setStatus(`Zoom ${rawZoom.toFixed(2)}\nStatic tiles only`);
         return;
       }
+
+      staticTiles?.setOpacity(0);
 
       const availableChunkZooms = Object.keys(manifest.zoom_levels).map(Number);
       const maxChunkZoom = Math.max(...availableChunkZooms);
       const minChunkZoom = Math.min(...availableChunkZooms);
       const chunkZoom = Math.max(
         minChunkZoom,
-        Math.min(maxChunkZoom, roundedZoom)
+        Math.min(maxChunkZoom, chunkCandidateZoom)
       );
       const tiles = getVisibleTiles(map, chunkZoom);
 
