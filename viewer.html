@@ -1,673 +1,1100 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <title>Forgotten Realms Graph Viewer</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta charset="utf-8"/>
+    <title>Forgotten Realms Graph Viewer</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
 
-  <link
-    rel="stylesheet"
-    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-    crossorigin=""
-  />
+    <link
+            rel="stylesheet"
+            href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+            crossorigin=""
+    />
 
-  <style>
-    html, body, #map {
-      width: 100%;
-      height: 100%;
-      margin: 0;
-      padding: 0;
-      overflow: hidden;
-      background: #111827;
-      font-family: Arial, sans-serif;
-    }
+    <style>
+        html, body, #map {
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background: #111827;
+            font-family: Arial, sans-serif;
+        }
 
-    .panel {
-      position: absolute;
-      top: 12px;
-      left: 12px;
-      z-index: 1000;
-      width: 360px;
-      max-width: calc(100vw - 24px);
-      padding: 12px;
-      border-radius: 10px;
-      background: rgba(17, 24, 39, 0.94);
-      color: white;
-      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
-    }
+        .panel {
+            position: absolute;
+            top: 12px;
+            left: 12px;
+            z-index: 1000;
+            width: 360px;
+            max-width: calc(100vw - 24px);
+            padding: 12px;
+            border-radius: 10px;
+            background: rgba(17, 24, 39, 0.94);
+            color: white;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+        }
 
-    .panel h1 {
-      margin: 0 0 8px 0;
-      font-size: 18px;
-    }
+        .panel h1 {
+            margin: 0 0 8px 0;
+            font-size: 18px;
+        }
 
-    .panel input {
-      width: 100%;
-      box-sizing: border-box;
-      margin-top: 8px;
-      padding: 8px;
-      border-radius: 6px;
-      border: none;
-      outline: none;
-    }
+        .panel input {
+            width: 100%;
+            box-sizing: border-box;
+            margin-top: 8px;
+            padding: 8px;
+            border-radius: 6px;
+            border: none;
+            outline: none;
+        }
 
-    .panel .buttons {
-      margin-top: 8px;
-      display: flex;
-      gap: 8px;
-      flex-wrap: wrap;
-    }
+        .panel .buttons {
+            margin-top: 8px;
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
 
-    .panel button {
-      padding: 8px 10px;
-      border: none;
-      border-radius: 6px;
-      cursor: pointer;
-    }
+        .panel button {
+            padding: 8px 10px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+        }
 
-    .status, .info {
-      margin-top: 8px;
-      font-size: 13px;
-      line-height: 1.4;
-      white-space: pre-wrap;
-    }
+        .status, .info {
+            margin-top: 8px;
+            font-size: 13px;
+            line-height: 1.4;
+            white-space: pre-wrap;
+        }
 
-    .leaflet-container {
-      background: #111827;
-    }
+        .info a {
+            color: #93c5fd;
+        }
 
-    .node-label {
-      color: white;
-      font-size: 11px;
-      text-shadow:
-        0 0 2px rgba(0,0,0,0.9),
-        0 0 4px rgba(0,0,0,0.9);
-      white-space: nowrap;
-      pointer-events: none;
-    }
+        .info a:hover {
+            color: #bfdbfe;
+        }
 
-    .legend {
-      margin-top: 8px;
-      font-size: 12px;
-      opacity: 0.9;
-    }
-  </style>
+        .leaflet-container {
+            background: #111827;
+        }
+
+        .node-label {
+            color: white;
+            font-size: 11px;
+            text-shadow: 0 0 2px rgba(0, 0, 0, 0.9), 0 0 4px rgba(0, 0, 0, 0.9);
+            white-space: nowrap;
+            pointer-events: none;
+        }
+
+        .legend {
+            margin-top: 8px;
+            font-size: 12px;
+            opacity: 0.9;
+        }
+    </style>
 </head>
 <body>
-  <div class="panel">
+<div class="panel">
     <h1>Forgotten Realms Graph</h1>
     <div id="status" class="status">Loading manifest...</div>
 
-    <input id="searchInput" type="text" placeholder="Search loaded node title..." />
+    <input id="searchInput" type="text" placeholder="Search loaded node title..."/>
 
     <div class="buttons">
-      <button id="searchBtn">Find</button>
-      <button id="resetBtn">Reset view</button>
-      <button id="clearBtn">Clear highlight</button>
+        <button id="searchBtn">Find</button>
+        <button id="highlightCategoryBtn">Highlight Category</button>
+        <button id="resetBtn">Reset view</button>
+        <button id="clearBtn">Clear highlight</button>
+        <button id="toggleEdgesBtn">Edges: On</button>
     </div>
 
     <div class="legend">
-      Zoom 0-6: static tiles only.<br />
-      Zoom 7+: interactive chunks load.<br />
-      Labels appear only at higher zoom.
+        Zoom 0-6: static node tiles + static edge tiles.<br/>
+        Zoom 7+: interactive node chunks load.<br/>
+        Highlighted neighborhood stays visible when zooming back out.
     </div>
 
     <div id="coords" class="info">Cursor: -, -</div>
     <div id="info" class="info">Waiting for data...</div>
-  </div>
+</div>
 
-  <div id="map"></div>
+<div id="map"></div>
 
-  <script
-    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
-    crossorigin=""
-  ></script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
 
-  <script>
+<script>
     const TILE_SIZE = 1024;
-    const STATIC_TILE_MAX_ZOOM = 6;
-    const INTERACTIVE_MIN_ZOOM = 7;
-    const LABEL_MIN_ZOOM_DEFAULT = 8;
     const NODE_RADIUS_SCALE = 1.0;
 
-    const TILES_BASE = "./data/tiles";
+    const NODE_TILES_BASE = "./data/tiles_nodes";
+    const EDGE_TILES_BASE = "./data/tiles_edges";
     const CHUNKS_BASE = "./data/graph_chunks";
+    const ADJACENCY_BASE = `${CHUNKS_BASE}/adjacency`;
 
     const statusEl = document.getElementById("status");
     const coordsEl = document.getElementById("coords");
     const infoEl = document.getElementById("info");
     const searchInput = document.getElementById("searchInput");
     const searchBtn = document.getElementById("searchBtn");
+    const highlightCategoryBtn = document.getElementById("highlightCategoryBtn");
     const resetBtn = document.getElementById("resetBtn");
     const clearBtn = document.getElementById("clearBtn");
+    const toggleEdgesBtn = document.getElementById("toggleEdgesBtn");
 
     let manifest = null;
+    let zoomConfig = null;
+    let edgesEnabled = true;
+    let nodeTiles = null;
+    let edgeTiles = null;
     let boundsInfo = null;
     let map = null;
-    let staticTiles = null;
+
+    let preservedHighlightGraph = null; // { nodes: Map<string, object>, edges: Array<{source,target}> }
+    let highlightedNodeId = null;
+    let highlightedNeighborIds = new Set();
+    let highlightedCategoryName = null;
+    let searchIndex = [];
 
     const loadedNodeTiles = new Set();
-    const loadedEdgeTiles = new Set();
+    const loadedNodeTileNodeIds = new Map();
     const nodeTileRequests = new Map();
-    const edgeTileRequests = new Map();
 
-    const nodeLayer = L.layerGroup();
     const edgeLayer = L.layerGroup();
+    const highlightEdgeLayer = L.layerGroup();
+    const nodeLayer = L.layerGroup();
+    const highlightNodeLayer = L.layerGroup();
     const labelLayer = L.layerGroup();
+    const highlightLabelLayer = L.layerGroup();
 
-    const nodeIndex = new Map();   // id -> {latlng, data, layer}
-    const labelIndex = new Map();  // id -> label marker
-    const visibleEdgeKeys = new Set();
+    const nodeIndex = new Map(); // visible interactive nodes only
+    const labelIndex = new Map(); // visible interactive labels only
+    const highlightNodeIndex = new Map();
+    const highlightLabelIndex = new Map();
+    const highlightEdgeKeys = new Set();
 
-    let highlightedNodeId = null;
     let viewUpdateToken = 0;
+    let viewUpdateFrame = null;
+    let currentInteractiveZoom = null;
+    let currentInteractiveTileKeys = new Set();
+
+    function getStaticTileMaxZoom() {
+        return zoomConfig?.static_tile_max_zoom ?? manifest?.zoom_config?.static_tile_max_zoom ?? 5;
+    }
+
+    function getInteractiveMinZoom() {
+        return zoomConfig?.interactive_min_zoom ?? manifest?.zoom_config?.interactive_min_zoom ?? 6;
+    }
+
+    function getEdgeTileMaxZoom() {
+        return zoomConfig?.edge_tile_max_zoom ?? manifest?.zoom_config?.edge_tile_max_zoom ?? 7;
+    }
 
     function getLabelMinZoom() {
-      return manifest?.label_min_zoom ?? LABEL_MIN_ZOOM_DEFAULT;
+        return zoomConfig?.label_min_zoom ?? manifest?.zoom_config?.label_min_zoom ?? manifest?.label_min_zoom ?? 7;
+    }
+
+    function scheduleViewUpdate() {
+        if (viewUpdateFrame !== null) return;
+
+        viewUpdateFrame = requestAnimationFrame(() => {
+            viewUpdateFrame = null;
+            updateStaticTileVisibility();
+            updateVisibleData().catch(err => {
+                console.error(err);
+                setStatus(`Error updating view: ${err.message}`);
+            });
+        });
     }
 
     function setStatus(text) {
-      statusEl.textContent = text;
+        statusEl.textContent = text;
+    }
+
+    function escapeHtml(value) {
+        return String(value ?? "")
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#39;");
     }
 
     function setInfo(text) {
-      infoEl.textContent = text;
+        infoEl.textContent = text;
+    }
+
+    function setInfoHtml(html) {
+        infoEl.innerHTML = html;
     }
 
     function setCoords(text) {
-      coordsEl.textContent = text;
+        coordsEl.textContent = text;
     }
 
     async function fetchJson(path) {
-      const response = await fetch(path);
-      if (!response.ok) {
-        throw new Error(`Failed to fetch ${path}`);
-      }
-      return await response.json();
+        const r = await fetch(path);
+        if (!r.ok) throw new Error(`Failed to fetch ${path}`);
+        return r.json();
     }
 
-    function worldBoundsToLeafletBounds(bounds) {
-      return L.latLngBounds(
-        [bounds.min_y, bounds.min_x],
-        [bounds.max_y, bounds.max_x]
-      );
+    async function sha1Hex(text) {
+        const data = new TextEncoder().encode(text);
+        const hashBuffer = await crypto.subtle.digest("SHA-1", data);
+        const hashArray = Array.from(new Uint8Array(hashBuffer));
+        return hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
     }
 
-    function getWorldCenter(bounds) {
-      return [
-        (bounds.min_y + bounds.max_y) / 2,
-        (bounds.min_x + bounds.max_x) / 2,
-      ];
+    function hexToRgb(hex) {
+        const clean = (hex || "").replace("#", "");
+        if (clean.length !== 6) return {r: 120, g: 120, b: 120};
+        return {
+            r: parseInt(clean.slice(0, 2), 16),
+            g: parseInt(clean.slice(2, 4), 16),
+            b: parseInt(clean.slice(4, 6), 16),
+        };
     }
 
-    function resetMapView(currentMap, bounds) {
-      const leafletBounds = worldBoundsToLeafletBounds(bounds);
-      const zoom = currentMap.getBoundsZoom(leafletBounds, false, L.point(20, 20));
-      currentMap.setView(
-        getWorldCenter(bounds),
-        zoom,
-        { animate: false }
-      );
+    function clamp(value, minValue, maxValue) {
+        return Math.max(minValue, Math.min(maxValue, value));
+    }
+
+    function edgeOpacityForNodeSizes(sourceSize, targetSize, highlighted = false) {
+        if (highlighted) return 0.95;
+
+        const maxSize = Math.max(Number(sourceSize) || 0, Number(targetSize) || 0, 0);
+        const opacity = 0.34 + Math.log1p(maxSize) * 0.12;
+        return clamp(opacity, 0.34, 0.9);
+    }
+
+    function edgeGradientStyle(sourceColor, targetColor, sourceSize, targetSize, highlighted = false) {
+        const a = hexToRgb(sourceColor);
+        const b = hexToRgb(targetColor);
+        const mid = {
+            r: Math.round((a.r + b.r) / 2),
+            g: Math.round((a.g + b.g) / 2),
+            b: Math.round((a.b + b.b) / 2),
+        };
+        return {
+            color: `rgb(${mid.r}, ${mid.g}, ${mid.b})`,
+            weight: highlighted ? 2 : 1,
+            opacity: edgeOpacityForNodeSizes(sourceSize, targetSize, highlighted),
+        };
+    }
+
+    function buildWorldCRS(bounds) {
+        const minX = bounds.min_x;
+        const maxX = bounds.max_x;
+        const minY = bounds.min_y;
+        const maxY = bounds.max_y;
+        const worldW = Math.max(maxX - minX, 1e-9);
+        const worldH = Math.max(maxY - minY, 1e-9);
+
+        const projection = {
+            project(latlng) {
+                const px = ((latlng.lng - minX) / worldW) * TILE_SIZE;
+                const py = (1.0 - (latlng.lat - minY) / worldH) * TILE_SIZE;
+                return L.point(px, py);
+            },
+            unproject(pt) {
+                const worldX = (pt.x / TILE_SIZE) * worldW + minX;
+                const worldY = (1.0 - pt.y / TILE_SIZE) * worldH + minY;
+                return L.latLng(worldY, worldX);
+            },
+            bounds: L.bounds(L.point(0, 0), L.point(TILE_SIZE, TILE_SIZE)),
+        };
+
+        return L.extend({}, L.CRS, {
+            code: "CRS:World",
+            projection,
+            transformation: new L.Transformation(1, 0, 1, 0),
+            scale(zoom) {
+                return Math.pow(2, zoom);
+            },
+            zoom(scale) {
+                return Math.log(scale) / Math.LN2;
+            },
+            infinite: false,
+            wrapLng: null,
+            wrapLat: null,
+        });
+    }
+
+    function wll(worldX, worldY) {
+        return L.latLng(worldY, worldX);
+    }
+
+    function worldBoundsToLeaflet(b) {
+        return L.latLngBounds(wll(b.min_x, b.min_y), wll(b.max_x, b.max_y));
+    }
+
+    function resetMapView(m, b) {
+        const lb = worldBoundsToLeaflet(b);
+        const zoom = m.getBoundsZoom(lb, false, L.point(20, 20));
+        m.setView(wll((b.min_x + b.max_x) / 2, (b.min_y + b.max_y) / 2), zoom, {animate: false});
     }
 
     function buildMap(bounds) {
-      const leafletBounds = worldBoundsToLeafletBounds(bounds);
+        const crs = buildWorldCRS(bounds);
+        const leafletBounds = worldBoundsToLeaflet(bounds);
 
-      const builtMap = L.map("map", {
-        crs: L.CRS.Simple,
-        minZoom: 0,
-        maxZoom: 10,
-        zoomSnap: 0.25,
-        zoomDelta: 0.5,
-        attributionControl: false,
-        scrollWheelZoom: true,
-        wheelPxPerZoomLevel: 180,
-      });
-
-      resetMapView(builtMap, bounds);
-      builtMap.setMaxBounds(leafletBounds.pad(0.1));
-
-      staticTiles = L.tileLayer(`${TILES_BASE}/{z}/{x}/{y}.png`, {
-        tileSize: TILE_SIZE,
-        minZoom: 0,
-        maxNativeZoom: STATIC_TILE_MAX_ZOOM,
-        maxZoom: 10,
-        noWrap: true,
-        bounds: leafletBounds,
-      });
-
-      staticTiles.addTo(builtMap);
-      nodeLayer.addTo(builtMap);
-      edgeLayer.addTo(builtMap);
-      labelLayer.addTo(builtMap);
-
-      builtMap.on("zoomend moveend", () => {
-        updateVisibleData().catch(err => {
-          console.error(err);
-          setStatus(`Error updating view: ${err.message}`);
+        const builtMap = L.map("map", {
+            crs,
+            minZoom: 0,
+            maxZoom: 10,
+            zoomSnap: 0.25,
+            zoomDelta: 0.5,
+            attributionControl: false,
+            scrollWheelZoom: true,
+            wheelPxPerZoomLevel: 180,
         });
-      });
 
-      builtMap.on("mousemove", event => {
-        setCoords(
-          `Cursor: x=${event.latlng.lng.toFixed(2)} y=${event.latlng.lat.toFixed(2)}`
-        );
-      });
+        resetMapView(builtMap, bounds);
+        builtMap.setMaxBounds(leafletBounds.pad(0.1));
 
-      builtMap.on("mouseout", () => {
-        setCoords("Cursor: -, -");
-      });
+        edgeTiles = L.tileLayer(`${EDGE_TILES_BASE}/{z}/{x}/{y}.png`, {
+            tileSize: TILE_SIZE,
+            minZoom: 0,
+            maxNativeZoom: getEdgeTileMaxZoom(),
+            maxZoom: 10,
+            updateWhenIdle: false,
+            updateWhenZooming: true,
+            keepBuffer: 4,
+            noWrap: true,
+            bounds: leafletBounds,
+            opacity: 1.0,
+        });
 
-      return builtMap;
+        nodeTiles = L.tileLayer(`${NODE_TILES_BASE}/{z}/{x}/{y}.png`, {
+            tileSize: TILE_SIZE,
+            minZoom: 0,
+            maxNativeZoom: getStaticTileMaxZoom(),
+            maxZoom: getInteractiveMinZoom(),
+            updateWhenIdle: false,
+            updateWhenZooming: true,
+            keepBuffer: 4,
+            noWrap: true,
+            bounds: leafletBounds,
+            opacity: 1.0,
+        });
+
+        if (edgesEnabled) edgeTiles.addTo(builtMap);
+        edgeLayer.addTo(builtMap);
+        highlightEdgeLayer.addTo(builtMap);
+        nodeTiles.addTo(builtMap);
+        nodeLayer.addTo(builtMap);
+        highlightNodeLayer.addTo(builtMap);
+        labelLayer.addTo(builtMap);
+        highlightLabelLayer.addTo(builtMap);
+
+        updateStaticTileVisibility();
+
+        builtMap.on("drag move zoom", scheduleViewUpdate);
+
+        builtMap.on("mousemove", e => {
+            setCoords(`Cursor: x=${e.latlng.lng.toFixed(2)} y=${e.latlng.lat.toFixed(2)}`);
+        });
+
+        builtMap.on("mouseout", () => {
+            setCoords("Cursor: -, -");
+        });
+
+        return builtMap;
     }
 
-    function tileKey(zoom, tx, ty, type) {
-      return `${zoom}:${tx}:${ty}:${type}`;
+    function updateStaticTileVisibility() {
+        if (!map) return;
+
+        const zoom = map.getZoom();
+
+        if (zoom < getInteractiveMinZoom()) {
+            if (!map.hasLayer(nodeTiles)) nodeTiles.addTo(map);
+        } else if (map.hasLayer(nodeTiles)) {
+            map.removeLayer(nodeTiles);
+        }
+
+        if (edgesEnabled) {
+            if (!map.hasLayer(edgeTiles)) edgeTiles.addTo(map);
+        } else if (map.hasLayer(edgeTiles)) {
+            map.removeLayer(edgeTiles);
+        }
+    }
+
+    function tileKey(zoom, tx, ty) {
+        return `${zoom}:${tx}:${ty}`;
     }
 
     function getVisibleTiles(currentMap, zoom) {
-      const zInfo = manifest.zoom_levels[String(zoom)];
-      if (!zInfo) return [];
+        const zInfo = manifest.zoom_levels[String(zoom)];
+        if (!zInfo) return [];
 
-      const tilesPerAxis = zInfo.tiles_per_axis;
-      const b = currentMap.getBounds();
+        const tilesPerAxis = zInfo.tiles_per_axis;
+        const b = currentMap.getBounds();
+        const bd = boundsInfo;
 
-      const minX = boundsInfo.min_x;
-      const maxX = boundsInfo.max_x;
-      const minY = boundsInfo.min_y;
-      const maxY = boundsInfo.max_y;
+        const worldW = Math.max(bd.max_x - bd.min_x, 1e-9);
+        const worldH = Math.max(bd.max_y - bd.min_y, 1e-9);
 
-      const width = Math.max(maxX - minX, 1e-9);
-      const height = Math.max(maxY - minY, 1e-9);
-
-      function coordToTileX(x) {
-        const nx = (x - minX) / width;
-        return Math.max(0, Math.min(tilesPerAxis - 1, Math.floor(nx * tilesPerAxis)));
-      }
-
-      function coordToTileY(y) {
-        const ny = (y - minY) / height;
-        return Math.max(0, Math.min(tilesPerAxis - 1, Math.floor(ny * tilesPerAxis)));
-      }
-
-      const txMin = coordToTileX(b.getWest());
-      const txMax = coordToTileX(b.getEast());
-      const tyMin = coordToTileY(b.getSouth());
-      const tyMax = coordToTileY(b.getNorth());
-
-      const tiles = [];
-      for (let tx = Math.min(txMin, txMax); tx <= Math.max(txMin, txMax); tx++) {
-        for (let ty = Math.min(tyMin, tyMax); ty <= Math.max(tyMin, tyMax); ty++) {
-          tiles.push({ tx, ty });
+        function toTX(worldX) {
+            const nx = (worldX - bd.min_x) / worldW;
+            return Math.max(0, Math.min(tilesPerAxis - 1, Math.floor(nx * tilesPerAxis)));
         }
-      }
 
-      return tiles;
+        function toTY(worldY) {
+            const ny = 1.0 - (worldY - bd.min_y) / worldH;
+            return Math.max(0, Math.min(tilesPerAxis - 1, Math.floor(ny * tilesPerAxis)));
+        }
+
+        const txMin = toTX(b.getWest());
+        const txMax = toTX(b.getEast());
+        const tyMin = toTY(b.getNorth());
+        const tyMax = toTY(b.getSouth());
+
+        const tiles = [];
+        for (let tx = txMin; tx <= txMax; tx++) {
+            for (let ty = tyMin; ty <= tyMax; ty++) {
+                tiles.push({tx, ty});
+            }
+        }
+        return tiles;
+    }
+
+    function getNodeEntry(nodeId) {
+        return highlightNodeIndex.get(nodeId) ?? nodeIndex.get(nodeId) ?? null;
+    }
+
+    function getAllNodeEntries() {
+        const merged = new Map(nodeIndex);
+        for (const [id, entry] of highlightNodeIndex.entries()) {
+            merged.set(id, entry);
+        }
+        return merged;
+    }
+
+    function makeNodeStyle(node, role = "default") {
+        if (role === "highlighted") {
+            return {
+                radius: Math.max(1.5, node.size * NODE_RADIUS_SCALE),
+                color: "#ffffff",
+                fillColor: "#ef4444",
+                fillOpacity: 1.0,
+                opacity: 1.0,
+                weight: 2,
+            };
+        }
+
+        if (role === "neighbor") {
+            return {
+                radius: Math.max(1.5, node.size * NODE_RADIUS_SCALE),
+                color: "#ffffff",
+                fillColor: "#10b981",
+                fillOpacity: 0.95,
+                opacity: 1.0,
+                weight: 1.5,
+            };
+        }
+
+        return {
+            radius: Math.max(1.5, node.size * NODE_RADIUS_SCALE),
+            color: node.color,
+            fillColor: node.color,
+            fillOpacity: 0.8,
+            opacity: 1.0,
+            weight: 1,
+        };
+    }
+
+    function registerNodeLayer(index, layerGroup, node, role = "default") {
+        const latlng = wll(node.x, node.y);
+        const circle = L.circleMarker(latlng, makeNodeStyle(node, role));
+
+        circle.on("click", async () => {
+            const token = ++viewUpdateToken;
+            await ensureHighlightedNeighborhood(node.id, token);
+            if (token !== viewUpdateToken) return;
+            renderHighlightOverlay();
+        });
+
+        index.set(node.id, {latlng, data: node, layer: circle});
+        layerGroup.addLayer(circle);
+        return circle;
+    }
+
+    function addVisibleNode(node) {
+        if (nodeIndex.has(node.id)) return;
+        registerNodeLayer(nodeIndex, nodeLayer, node, "default");
+    }
+
+    function addHighlightNode(node) {
+        if (highlightNodeIndex.has(node.id)) return;
+        const role = node.id === highlightedNodeId ? "highlighted" : "neighbor";
+        registerNodeLayer(highlightNodeIndex, highlightNodeLayer, node, role);
+    }
+
+    function addLabelToLayer(index, layerGroup, node) {
+        if (!node.label || index.has(node.id)) return;
+
+        const marker = L.marker(wll(node.x, node.y), {
+            interactive: false,
+            icon: L.divIcon({
+                className: "node-label",
+                html: node.label,
+                iconSize: [0, 0],
+            }),
+        });
+
+        index.set(node.id, marker);
+        layerGroup.addLayer(marker);
+    }
+
+    function clearVisibleLabels() {
+        labelLayer.clearLayers();
+        labelIndex.clear();
+    }
+
+    function clearHighlightLabels() {
+        highlightLabelLayer.clearLayers();
+        highlightLabelIndex.clear();
+    }
+
+    function clearVisibleInteractiveData() {
+        nodeLayer.clearLayers();
+        edgeLayer.clearLayers();
+        clearVisibleLabels();
+        nodeIndex.clear();
+        loadedNodeTiles.clear();
+        loadedNodeTileNodeIds.clear();
+        currentInteractiveZoom = null;
+        currentInteractiveTileKeys = new Set();
+    }
+
+    function clearHighlightOverlay() {
+        highlightEdgeLayer.clearLayers();
+        highlightNodeLayer.clearLayers();
+        clearHighlightLabels();
+        highlightNodeIndex.clear();
+        highlightEdgeKeys.clear();
     }
 
     function clearHighlightVisuals() {
-      highlightedNodeId = null;
-
-      for (const [, entry] of nodeIndex.entries()) {
-        entry.layer.setStyle({
-          color: entry.data.color,
-          fillColor: entry.data.color,
-          fillOpacity: 0.8,
-          opacity: 1.0,
-          weight: 1,
-        });
-      }
-
-      edgeLayer.eachLayer(layer => {
-        if (layer._baseStyle) {
-          layer.setStyle(layer._baseStyle);
-        }
-      });
-
-      setInfo("Highlight cleared.");
+        highlightedNodeId = null;
+        highlightedNeighborIds = new Set();
+        highlightedCategoryName = null;
+        preservedHighlightGraph = null;
+        clearHighlightOverlay();
+        setInfo("Highlight cleared.");
     }
 
-    function clearInteractiveData() {
-      clearHighlightVisuals();
-      nodeLayer.clearLayers();
-      edgeLayer.clearLayers();
-      labelLayer.clearLayers();
-      nodeIndex.clear();
-      labelIndex.clear();
-      visibleEdgeKeys.clear();
-      loadedNodeTiles.clear();
-      loadedEdgeTiles.clear();
-      nodeTileRequests.clear();
-      edgeTileRequests.clear();
-      setInfo("Interactive graph cleared.");
+    function removeVisibleNodeById(nodeId) {
+        const entry = nodeIndex.get(nodeId);
+        if (!entry) return;
+
+        nodeLayer.removeLayer(entry.layer);
+        nodeIndex.delete(nodeId);
+
+        const label = labelIndex.get(nodeId);
+        if (label) {
+            labelLayer.removeLayer(label);
+            labelIndex.delete(nodeId);
+        }
     }
 
-    function applyHighlight(nodeId) {
-      highlightedNodeId = nodeId;
-      const neighbors = new Set();
+    function pruneHiddenTiles(desiredTileKeys) {
+        for (const key of Array.from(loadedNodeTiles)) {
+            if (desiredTileKeys.has(key)) continue;
 
-      edgeLayer.eachLayer(layer => {
-        const source = layer._sourceId;
-        const target = layer._targetId;
-        const connected = source === nodeId || target === nodeId;
+            const nodeIds = loadedNodeTileNodeIds.get(key) || new Set();
+            for (const nodeId of nodeIds) {
+                removeVisibleNodeById(nodeId);
+            }
 
-        if (connected) {
-          neighbors.add(source);
-          neighbors.add(target);
-          layer.setStyle({
-            color: "rgba(255,255,255,0.85)",
-            weight: 2,
-            opacity: 0.9,
-          });
-        } else {
-          layer.setStyle({
-            color: "rgba(120,120,120,0.10)",
-            weight: 1,
-            opacity: 0.15,
-          });
+            loadedNodeTiles.delete(key);
+            loadedNodeTileNodeIds.delete(key);
         }
-      });
+    }
 
-      for (const [id, entry] of nodeIndex.entries()) {
-        if (id === nodeId) {
-          entry.layer.setStyle({
-            color: "#ffffff",
-            fillColor: "#ef4444",
-            fillOpacity: 1.0,
-            opacity: 1.0,
-            weight: 2,
-          });
-        } else if (neighbors.has(id)) {
-          entry.layer.setStyle({
-            color: "#ffffff",
-            fillColor: "#10b981",
-            fillOpacity: 0.95,
-            opacity: 1.0,
-            weight: 1.5,
-          });
-        } else {
-          entry.layer.setStyle({
-            color: entry.data.color,
-            fillColor: entry.data.color,
-            fillOpacity: 0.20,
-            opacity: 0.3,
-            weight: 1,
-          });
-        }
-      }
+    function setHighlightInfo(nodeId) {
+        const entry = getNodeEntry(nodeId);
+        if (!entry) return;
 
-      const entry = nodeIndex.get(nodeId);
-      if (entry) {
         const d = entry.data;
-        const clusterText = d.cluster_name
-          ? `${d.cluster_name} (#${d.cluster_id})`
-          : `${d.cluster_id}`;
-        const categoriesText = d.categories && d.categories.length
-          ? d.categories.join(", ")
-          : "None";
-        setInfo(
-          `Node: ${d.id}\n` +
-          `Cluster: ${clusterText}\n` +
-          `Categories: ${categoriesText}\n` +
-          `In-degree: ${d.in_degree}\n` +
-          `Out-degree: ${d.out_degree}`
+        const pageUrl = pageUrlFromTitle(d.id);
+        const clusterText = d.cluster_name ? `${d.cluster_name} (#${d.cluster_id})` : d.cluster_id;
+        const categoriesText = d.categories?.length ? d.categories.join(", ") : "None";
+        setInfoHtml(
+            `Node: ${escapeHtml(d.id)}<br>` +
+            `URL: <a href="${pageUrl}" target="_blank" rel="noopener noreferrer">${escapeHtml(pageUrl)}</a><br>` +
+            `Cluster: ${escapeHtml(clusterText)}<br>` +
+            `Categories: ${escapeHtml(categoriesText)}<br>` +
+            `In-degree: ${escapeHtml(d.in_degree)}<br>` +
+            `Out-degree: ${escapeHtml(d.out_degree)}`
         );
-      }
     }
 
-    function makeNodeLayer(node) {
-      const latlng = L.latLng(node.y, node.x);
-      const radius = Math.max(1.5, node.size * NODE_RADIUS_SCALE);
+    function setCategoryInfo(nodeId, categoryName, count) {
+        const entry = getNodeEntry(nodeId);
+        if (!entry) return;
+        const pageUrl = pageUrlFromTitle(entry.data.id);
 
-      const circle = L.circleMarker(latlng, {
-        radius,
-        color: node.color,
-        fillColor: node.color,
-        fillOpacity: 0.8,
-        opacity: 1.0,
-        weight: 1,
-      });
-
-      circle.on("click", () => {
-        applyHighlight(node.id);
-      });
-
-      nodeIndex.set(node.id, {
-        latlng,
-        data: node,
-        layer: circle,
-      });
-
-      return circle;
+        setInfoHtml(
+            `Node: ${escapeHtml(entry.data.id)}<br>` +
+            `URL: <a href="${pageUrl}" target="_blank" rel="noopener noreferrer">${escapeHtml(pageUrl)}</a><br>` +
+            `Category highlight: ${escapeHtml(categoryName)}<br>` +
+            `Matching nodes: ${escapeHtml(count)}`
+        );
     }
 
-    function maybeAddLabel(node) {
-      if (!node.label) return;
-      if (labelIndex.has(node.id)) return;
-
-      const marker = L.marker([node.y, node.x], {
-        interactive: false,
-        icon: L.divIcon({
-          className: "node-label",
-          html: node.label,
-          iconSize: [0, 0],
-        }),
-      });
-
-      labelIndex.set(node.id, marker);
-      labelLayer.addLayer(marker);
+    function pageUrlFromTitle(title) {
+        return `https://forgottenrealms.fandom.com/wiki/${encodeURIComponent(title.replace(/ /g, "_"))}`;
     }
 
-    function addEdge(sourceId, targetId) {
-      const source = nodeIndex.get(sourceId);
-      const target = nodeIndex.get(targetId);
+    function dedupeEdges(edges) {
+        const seen = new Set();
+        const deduped = [];
 
-      if (!source || !target) return;
-
-      const key = `${sourceId}→${targetId}`;
-      if (visibleEdgeKeys.has(key)) return;
-      visibleEdgeKeys.add(key);
-
-      const line = L.polyline(
-        [source.latlng, target.latlng],
-        {
-          color: "rgba(120,120,120,0.18)",
-          weight: 1,
-          opacity: 0.35,
+        for (const edge of edges) {
+            const key = `${edge.source}→${edge.target}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            deduped.push(edge);
         }
-      );
 
-      line._sourceId = sourceId;
-      line._targetId = targetId;
-      line._baseStyle = {
-        color: "rgba(120,120,120,0.18)",
-        weight: 1,
-        opacity: 0.35,
-      };
-
-      edgeLayer.addLayer(line);
+        return deduped;
     }
 
-    async function loadNodeTile(zoom, tx, ty, token) {
-      const key = tileKey(zoom, tx, ty, "nodes");
-      if (loadedNodeTiles.has(key)) return;
+    function buildHighlightGraph(nodeId, payload) {
+        const sourceEntry = getNodeEntry(nodeId);
+        if (!sourceEntry) return null;
 
-      const path = `${CHUNKS_BASE}/z${zoom}/nodes_${tx}_${ty}.json`;
-      let request = nodeTileRequests.get(key);
-      if (!request) {
-        request = fetchJson(path)
-          .catch(() => null)
-          .finally(() => {
-            nodeTileRequests.delete(key);
-          });
-        nodeTileRequests.set(key, request);
-      }
+        const graphNodes = new Map();
+        const graphEdges = [];
+        const neighborIds = new Set();
 
-      const nodes = await request;
-      if (!nodes || token !== viewUpdateToken) return;
-      if (loadedNodeTiles.has(key)) return;
+        graphNodes.set(nodeId, sourceEntry.data);
 
-      loadedNodeTiles.add(key);
+        for (const node of payload.neighbor_nodes || []) {
+            graphNodes.set(node.id, node);
+        }
+        for (const node of payload.out_nodes || []) {
+            graphNodes.set(node.id, node);
+        }
+        for (const node of payload.in_nodes || []) {
+            graphNodes.set(node.id, node);
+        }
 
-      for (const node of nodes) {
-        if (!nodeIndex.has(node.id)) {
-          const layer = makeNodeLayer(node);
-          nodeLayer.addLayer(layer);
+        for (const neighborId of payload.out || []) {
+            neighborIds.add(neighborId);
+            if (!graphNodes.has(neighborId)) {
+                const existing = getNodeEntry(neighborId);
+                if (existing) graphNodes.set(neighborId, existing.data);
+            }
+            graphEdges.push({source: nodeId, target: neighborId});
+        }
+
+        for (const neighborId of payload.in || []) {
+            neighborIds.add(neighborId);
+            if (!graphNodes.has(neighborId)) {
+                const existing = getNodeEntry(neighborId);
+                if (existing) graphNodes.set(neighborId, existing.data);
+            }
+            graphEdges.push({source: neighborId, target: nodeId});
+        }
+
+        if (graphEdges.length === 0) {
+            for (const neighborId of payload.neighbors || []) {
+                neighborIds.add(neighborId);
+                if (!graphNodes.has(neighborId)) {
+                    const existing = getNodeEntry(neighborId);
+                    if (existing) graphNodes.set(neighborId, existing.data);
+                }
+                graphEdges.push({source: nodeId, target: neighborId});
+            }
+        }
+
+        return {
+            nodes: graphNodes,
+            edges: dedupeEdges(graphEdges),
+            neighborIds,
+        };
+    }
+
+    async function ensureHighlightedNeighborhood(nodeId, token) {
+        const fileToken = await sha1Hex(nodeId);
+        if (token !== viewUpdateToken) return;
+
+        const payload = await fetchJson(`${ADJACENCY_BASE}/${fileToken}.json`).catch(() => null);
+        if (token !== viewUpdateToken) return;
+        if (!payload) return;
+
+        const graph = buildHighlightGraph(nodeId, payload);
+        if (!graph) return;
+
+        highlightedNodeId = nodeId;
+        highlightedNeighborIds = graph.neighborIds;
+        highlightedCategoryName = null;
+        preservedHighlightGraph = {
+            nodes: graph.nodes,
+            edges: graph.edges,
+        };
+        setHighlightInfo(nodeId);
+    }
+
+    function highlightCategoryForCurrentNode() {
+        if (!highlightedNodeId) {
+            setInfo("Select or find a node first.");
+            return;
+        }
+
+        const entry = getNodeEntry(highlightedNodeId);
+        if (!entry) {
+            setInfo("Selected node is not available.");
+            return;
+        }
+
+        const categoryName = entry.data.categories?.[0];
+        if (!categoryName) {
+            setInfo(`Node has no category: ${entry.data.id}`);
+            return;
+        }
+
+        const graphNodes = new Map();
+        const neighborIds = new Set();
+
+        for (const node of searchIndex) {
+            if (!(node.categories || []).includes(categoryName)) continue;
+            graphNodes.set(node.id, node);
+            if (node.id !== highlightedNodeId) {
+                neighborIds.add(node.id);
+            }
+        }
+
+        graphNodes.set(highlightedNodeId, entry.data);
+        highlightedCategoryName = categoryName;
+        highlightedNeighborIds = neighborIds;
+        preservedHighlightGraph = {
+            nodes: graphNodes,
+            edges: [],
+        };
+        setCategoryInfo(highlightedNodeId, categoryName, graphNodes.size);
+        renderHighlightOverlay();
+    }
+
+    function getEdgeEndpointPoints(fromLatLng, toLatLng, sourceRadiusPx = 0, targetRadiusPx = 0) {
+        const p1 = map.latLngToLayerPoint(fromLatLng);
+        const p2 = map.latLngToLayerPoint(toLatLng);
+
+        const dx = p2.x - p1.x;
+        const dy = p2.y - p1.y;
+        const len = Math.hypot(dx, dy);
+        if (len < 0.0001) return null;
+
+        const ux = dx / len;
+        const uy = dy / len;
+
+        return {
+            start: L.point(p1.x + ux * sourceRadiusPx, p1.y + uy * sourceRadiusPx),
+            end: L.point(p2.x - ux * targetRadiusPx, p2.y - uy * targetRadiusPx),
+            ux,
+            uy,
+        };
+    }
+
+    function makeArrowHeadPoints(fromLatLng, toLatLng, sourceRadiusPx = 0, targetRadiusPx = 0, sizePx = 10, spreadPx = 6) {
+        const endpoints = getEdgeEndpointPoints(fromLatLng, toLatLng, sourceRadiusPx, targetRadiusPx);
+        if (!endpoints) return null;
+
+        const {end: tip, ux, uy} = endpoints;
+        const baseX = tip.x - ux * sizePx;
+        const baseY = tip.y - uy * sizePx;
+
+        const px = -uy;
+        const py = ux;
+
+        const left = L.point(baseX + px * spreadPx, baseY + py * spreadPx);
+        const right = L.point(baseX - px * spreadPx, baseY - py * spreadPx);
+
+        return [
+            map.layerPointToLatLng(tip),
+            map.layerPointToLatLng(left),
+            map.layerPointToLatLng(right),
+        ];
+    }
+
+    function addArrowedEdgeToLayer(layerGroup, keySet, sourceEntry, targetEntry, highlighted = false) {
+        if (!sourceEntry || !targetEntry) return;
+
+        const sourceId = sourceEntry.data.id;
+        const targetId = targetEntry.data.id;
+        const key = `${sourceId}→${targetId}`;
+        if (keySet.has(key)) return;
+        keySet.add(key);
+
+        const style = edgeGradientStyle(
+            sourceEntry.data.color,
+            targetEntry.data.color,
+            sourceEntry.data.size,
+            targetEntry.data.size,
+            highlighted
+        );
+
+        const sourceRadiusPx = sourceEntry.layer.getRadius ? sourceEntry.layer.getRadius() : Math.max(1.5, sourceEntry.data.size * NODE_RADIUS_SCALE);
+        const targetRadiusPx = targetEntry.layer.getRadius ? targetEntry.layer.getRadius() : Math.max(1.5, targetEntry.data.size * NODE_RADIUS_SCALE);
+        const endpoints = getEdgeEndpointPoints(sourceEntry.latlng, targetEntry.latlng, sourceRadiusPx, targetRadiusPx);
+        if (!endpoints) return;
+
+        const line = L.polyline([
+            map.layerPointToLatLng(endpoints.start),
+            map.layerPointToLatLng(endpoints.end),
+        ], style);
+        line._sourceId = sourceId;
+        line._targetId = targetId;
+        line._baseStyle = style;
+
+        const arrowPoints = makeArrowHeadPoints(
+            sourceEntry.latlng,
+            targetEntry.latlng,
+            sourceRadiusPx,
+            targetRadiusPx,
+            highlighted ? 12 : 9,
+            highlighted ? 7 : 5
+        );
+
+        let arrow = null;
+        if (arrowPoints) {
+            arrow = L.polygon(arrowPoints, {
+                color: style.color,
+                fillColor: style.color,
+                fillOpacity: style.opacity,
+                opacity: style.opacity,
+                weight: 1,
+                interactive: false,
+            });
+            arrow._sourceId = sourceId;
+            arrow._targetId = targetId;
+        }
+
+        const group = L.layerGroup();
+        group.addLayer(line);
+        if (arrow) group.addLayer(arrow);
+
+        group._line = line;
+        group._arrow = arrow;
+        group._sourceId = sourceId;
+        group._targetId = targetId;
+        group._baseStyle = style;
+
+        layerGroup.addLayer(group);
+    }
+
+    function renderHighlightOverlay() {
+        clearHighlightOverlay();
+        if (!preservedHighlightGraph || !highlightedNodeId) return;
+
+        for (const [, node] of preservedHighlightGraph.nodes.entries()) {
+            addHighlightNode(node);
+        }
+
+        for (const edge of preservedHighlightGraph.edges) {
+            const sourceEntry = highlightNodeIndex.get(edge.source);
+            const targetEntry = highlightNodeIndex.get(edge.target);
+            addArrowedEdgeToLayer(highlightEdgeLayer, highlightEdgeKeys, sourceEntry, targetEntry, true);
         }
 
         if (map.getZoom() >= getLabelMinZoom()) {
-          maybeAddLabel(node);
+            for (const [, entry] of highlightNodeIndex.entries()) {
+                entry.data.label = entry.data.label ?? entry.data.id;
+                addLabelToLayer(highlightLabelIndex, highlightLabelLayer, entry.data);
+            }
         }
-      }
     }
 
-    async function loadEdgeTile(zoom, tx, ty, token) {
-      const key = tileKey(zoom, tx, ty, "edges");
-      if (loadedEdgeTiles.has(key)) return;
+    async function loadNodeTile(zoom, tx, ty, token) {
+        const key = tileKey(zoom, tx, ty);
+        if (loadedNodeTiles.has(key)) return;
 
-      const path = `${CHUNKS_BASE}/z${zoom}/edges_${tx}_${ty}.json`;
-      let request = edgeTileRequests.get(key);
-      if (!request) {
-        request = fetchJson(path)
-          .catch(() => null)
-          .finally(() => {
-            edgeTileRequests.delete(key);
-          });
-        edgeTileRequests.set(key, request);
-      }
+        let req = nodeTileRequests.get(key);
+        if (!req) {
+            req = fetchJson(`${CHUNKS_BASE}/z${zoom}/nodes_${tx}_${ty}.json`)
+                .catch(() => null)
+                .finally(() => nodeTileRequests.delete(key));
+            nodeTileRequests.set(key, req);
+        }
 
-      const edges = await request;
-      if (!edges || token !== viewUpdateToken) return;
-      if (loadedEdgeTiles.has(key)) return;
+        const nodes = await req;
+        if (!nodes) return;
+        if (zoom !== currentInteractiveZoom || !currentInteractiveTileKeys.has(key)) return;
+        if (loadedNodeTiles.has(key)) return;
 
-      loadedEdgeTiles.add(key);
+        loadedNodeTiles.add(key);
+        loadedNodeTileNodeIds.set(key, new Set(nodes.map(node => node.id)));
 
-      for (const edge of edges) {
-        addEdge(edge.source, edge.target);
-      }
+        for (const node of nodes) {
+            addVisibleNode(node);
+            if (map.getZoom() >= getLabelMinZoom()) {
+                addLabelToLayer(labelIndex, labelLayer, node);
+            }
+        }
     }
 
     async function updateVisibleData() {
-      const token = ++viewUpdateToken;
-      const rawZoom = map.getZoom();
-      const chunkCandidateZoom = Math.floor(rawZoom);
+        const token = ++viewUpdateToken;
+        const rawZoom = map.getZoom();
+        const isInteractive = rawZoom >= getInteractiveMinZoom();
 
-      if (rawZoom < INTERACTIVE_MIN_ZOOM) {
-        staticTiles?.setOpacity(1);
-        clearInteractiveData();
-        setStatus(`Zoom ${rawZoom.toFixed(2)}\nStatic tiles only`);
-        return;
-      }
+        if (!isInteractive) {
+            clearVisibleInteractiveData();
+            renderHighlightOverlay();
 
-      staticTiles?.setOpacity(0);
-
-      const availableChunkZooms = Object.keys(manifest.zoom_levels).map(Number);
-      const maxChunkZoom = Math.max(...availableChunkZooms);
-      const minChunkZoom = Math.min(...availableChunkZooms);
-      const chunkZoom = Math.max(
-        minChunkZoom,
-        Math.min(maxChunkZoom, chunkCandidateZoom)
-      );
-      const tiles = getVisibleTiles(map, chunkZoom);
-
-      setStatus(
-        `Zoom ${rawZoom.toFixed(2)}\n` +
-        `Interactive chunk zoom: ${chunkZoom}\n` +
-        `Visible tiles: ${tiles.length}\n` +
-        `Loaded nodes: ${nodeIndex.size}\n` +
-        `Loaded edges: ${visibleEdgeKeys.size}`
-      );
-
-      for (const { tx, ty } of tiles) {
-        await loadNodeTile(chunkZoom, tx, ty, token);
-        if (token !== viewUpdateToken) return;
-      }
-
-      for (const { tx, ty } of tiles) {
-        await loadEdgeTile(chunkZoom, tx, ty, token);
-        if (token !== viewUpdateToken) return;
-      }
-
-      if (token !== viewUpdateToken) return;
-
-      if (rawZoom >= getLabelMinZoom()) {
-        for (const [, entry] of nodeIndex.entries()) {
-          entry.data.label = entry.data.label ?? entry.data.id;
-          maybeAddLabel(entry.data);
+            if (highlightedNodeId && preservedHighlightGraph) {
+                setStatus(
+                    `Zoom ${rawZoom.toFixed(2)}\n` +
+                    `Static tiles + preserved highlighted overlay`
+                );
+            } else {
+                setStatus(`Zoom ${rawZoom.toFixed(2)}\nStatic tiles only`);
+            }
+            return;
         }
-      } else {
-        labelLayer.clearLayers();
-        labelIndex.clear();
-      }
 
-      if (highlightedNodeId) {
-        applyHighlight(highlightedNodeId);
-      }
+        const floorZ = Math.floor(rawZoom);
+        const available = Object.keys(manifest.zoom_levels).map(Number);
+        const chunkZoom = Math.max(Math.min(...available), Math.min(Math.max(...available), floorZ));
+        const tiles = getVisibleTiles(map, chunkZoom);
+        const desiredTileKeys = new Set(tiles.map(({tx, ty}) => tileKey(chunkZoom, tx, ty)));
+
+        currentInteractiveZoom = chunkZoom;
+        currentInteractiveTileKeys = desiredTileKeys;
+
+        pruneHiddenTiles(desiredTileKeys);
+
+        setStatus(
+            `Zoom ${rawZoom.toFixed(2)}\n` +
+            `Chunk zoom: ${chunkZoom}\n` +
+            `Visible tiles: ${tiles.length}`
+        );
+
+        await Promise.all(tiles.map(({tx, ty}) => loadNodeTile(chunkZoom, tx, ty, token)));
+        if (token !== viewUpdateToken) return;
+
+        pruneHiddenTiles(desiredTileKeys);
+
+        if (rawZoom >= getLabelMinZoom()) {
+            for (const [, entry] of nodeIndex.entries()) {
+                entry.data.label = entry.data.label ?? entry.data.id;
+                addLabelToLayer(labelIndex, labelLayer, entry.data);
+            }
+        } else {
+            clearVisibleLabels();
+        }
+
+        renderHighlightOverlay();
     }
 
     function findMatchingNode(query) {
-      const q = query.trim().toLowerCase();
-      if (!q) return null;
+        const q = query.trim().toLowerCase();
+        if (!q) return null;
 
-      for (const [id, entry] of nodeIndex.entries()) {
-        if (id.toLowerCase() === q) return entry;
-      }
+        const allEntries = getAllNodeEntries();
+        for (const [id, entry] of allEntries.entries()) {
+            if (id.toLowerCase() === q) return entry;
+        }
 
-      for (const [id, entry] of nodeIndex.entries()) {
-        if (id.toLowerCase().includes(q)) return entry;
-      }
+        for (const [id, entry] of allEntries.entries()) {
+            if (id.toLowerCase().includes(q)) return entry;
+        }
 
-      return null;
+        for (const node of searchIndex) {
+            if (node.id.toLowerCase() === q) {
+                return {
+                    latlng: wll(node.x, node.y),
+                    data: node,
+                };
+            }
+        }
+
+        for (const node of searchIndex) {
+            if (node.id.toLowerCase().includes(q)) {
+                return {
+                    latlng: wll(node.x, node.y),
+                    data: node,
+                };
+            }
+        }
+
+        return null;
     }
 
-    function focusNode(entry) {
-      const targetZoom = Math.max(map.getZoom(), manifest.label_min_zoom ?? LABEL_MIN_ZOOM_DEFAULT);
-      map.setView(entry.latlng, targetZoom, { animate: true });
-      applyHighlight(entry.data.id);
-    }
-
-    async function bootstrap() {
-      manifest = await fetchJson(`${CHUNKS_BASE}/manifest.json`);
-      boundsInfo = manifest.bounds;
-
-      map = buildMap(boundsInfo);
-
-      searchBtn.addEventListener("click", async () => {
-        const query = searchInput.value.trim();
-        if (!query) return;
-
+    async function focusNodeBySearch(query) {
         let match = findMatchingNode(query);
 
         if (!match) {
-          setStatus(`Searching loaded data for "${query}"...`);
-          map.setZoom(Math.max(map.getZoom(), manifest.label_min_zoom ?? LABEL_MIN_ZOOM_DEFAULT));
-          await updateVisibleData();
-          match = findMatchingNode(query);
+            map.setZoom(Math.max(map.getZoom(), getInteractiveMinZoom()));
+            await updateVisibleData();
+            match = findMatchingNode(query);
         }
 
-        if (match) {
-          focusNode(match);
-        } else {
-          setInfo(`Node not found in loaded chunks: ${query}`);
+        if (!match) {
+            setInfo(`Node not found in loaded chunks: ${query}`);
+            return;
         }
-      });
 
-      resetBtn.addEventListener("click", () => {
-        resetMapView(map, boundsInfo);
-      });
+        const targetZoom = Math.max(map.getZoom(), getLabelMinZoom());
+        map.setView(match.latlng, targetZoom, {animate: true});
+        await updateVisibleData();
+        match = findMatchingNode(query) || match;
 
-      clearBtn.addEventListener("click", () => {
-        clearHighlightVisuals();
-      });
+        const token = ++viewUpdateToken;
+        await ensureHighlightedNeighborhood(match.data.id, token);
+        if (token !== viewUpdateToken) return;
+        renderHighlightOverlay();
+    }
 
-      await updateVisibleData();
-      setInfo("Ready. Zoom in to load interactive chunks.");
+    async function bootstrap() {
+        zoomConfig = await fetchJson("./zoom_config.json");
+        manifest = await fetchJson(`${CHUNKS_BASE}/manifest.json`);
+        searchIndex = await fetchJson(`${CHUNKS_BASE}/search_index.json`).catch(() => []);
+        boundsInfo = manifest.bounds;
+        map = buildMap(boundsInfo);
+
+        searchBtn.addEventListener("click", async () => {
+            const query = searchInput.value.trim();
+            if (!query) return;
+            setStatus(`Searching for "${query}"...`);
+            await focusNodeBySearch(query);
+        });
+
+        highlightCategoryBtn.addEventListener("click", () => {
+            highlightCategoryForCurrentNode();
+        });
+
+        resetBtn.addEventListener("click", () => {
+            resetMapView(map, boundsInfo);
+        });
+
+        clearBtn.addEventListener("click", () => {
+            clearHighlightVisuals();
+            scheduleViewUpdate();
+        });
+
+        toggleEdgesBtn.addEventListener("click", () => {
+            edgesEnabled = !edgesEnabled;
+            toggleEdgesBtn.textContent = edgesEnabled ? "Edges: On" : "Edges: Off";
+            updateStaticTileVisibility();
+        });
+
+        await updateVisibleData();
+        setInfo("Ready. Zoom in to load interactive chunks.");
     }
 
     bootstrap().catch(err => {
-      console.error(err);
-      setStatus(`Error: ${err.message}`);
+        console.error(err);
+        setStatus(`Error: ${err.message}`);
     });
-  </script>
+</script>
 </body>
 </html>

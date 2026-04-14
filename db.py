@@ -148,6 +148,81 @@ def insert_discovered_titles(titles: list[str]) -> None:
             [(t,) for t in titles],
         )
 
+def load_directed_node_adjacency(discovered_only: bool = True) -> dict[str, dict[str, list[str]]]:
+    with cursor() as (_, cur):
+        if discovered_only:
+            cur.execute(
+                """
+                SELECT l.source_title, l.target_title
+                FROM page_links l
+                JOIN discovered_pages ds ON ds.page_title = l.source_title
+                JOIN discovered_pages dt ON dt.page_title = l.target_title
+                """
+            )
+        else:
+            cur.execute(
+                """
+                SELECT source_title, target_title
+                FROM page_links
+                """
+            )
+
+        rows = cur.fetchall()
+
+    adjacency: dict[str, dict[str, set[str]]] = {}
+
+    for source, target in rows:
+        adjacency.setdefault(source, {"out": set(), "in": set()})
+        adjacency.setdefault(target, {"out": set(), "in": set()})
+        adjacency[source]["out"].add(target)
+        adjacency[target]["in"].add(source)
+
+    return {
+        node_id: {
+            "out": sorted(data["out"]),
+            "in": sorted(data["in"]),
+        }
+        for node_id, data in adjacency.items()
+    }
+
+def load_node_adjacency(discovered_only: bool = True) -> dict[str, list[str]]:
+    with cursor() as (_, cur):
+        if discovered_only:
+            cur.execute(
+                """
+                SELECT l.source_title, l.target_title
+                FROM page_links l
+                JOIN discovered_pages ds ON ds.page_title = l.source_title
+                JOIN discovered_pages dt ON dt.page_title = l.target_title
+                """
+            )
+        else:
+            cur.execute(
+                """
+                SELECT source_title, target_title
+                FROM page_links
+                """
+            )
+
+        rows = cur.fetchall()
+
+    adjacency: dict[str, set[str]] = {}
+
+    for source, target in rows:
+        adjacency.setdefault(source, set()).add(target)
+        adjacency.setdefault(target, set()).add(source)
+
+    return {
+        node_id: sorted(neighbors)
+        for node_id, neighbors in adjacency.items()
+    }
+
+
+def clear_cluster_and_layout_data() -> None:
+    with cursor() as (_, cur):
+        cur.execute("DELETE FROM cluster_assignments")
+        cur.execute("DELETE FROM cluster_colors")
+        cur.execute("DELETE FROM nodes_layout")
 
 def count_discovered_titles() -> int:
     with cursor() as (_, cur):

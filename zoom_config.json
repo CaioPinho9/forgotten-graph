@@ -1,0 +1,7 @@
+{
+  "static_tile_max_zoom": 5,
+  "interactive_min_zoom": 6,
+  "label_min_zoom": 7,
+  "chunk_max_zoom": 7,
+  "edge_tile_max_zoom": 6
+}
