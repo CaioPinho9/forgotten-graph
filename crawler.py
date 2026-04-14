@@ -1,23 +1,29 @@
-import csv
-import json
-import time
 import threading
-import requests
-
-from pathlib import Path
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
+from urllib.parse import quote
+
+import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+from db import (
+    init_db,
+    count_discovered_titles,
+    load_discovered_titles,
+    load_discovered_title_set,
+    load_searched_title_set,
+    load_failed_title_set,
+    insert_discovered_titles,
+    store_crawl_results,
+)
+
 API_URL = "https://forgottenrealms.fandom.com/api.php"
+WIKI_PAGE_BASE_URL = "https://forgottenrealms.fandom.com/wiki/"
 
 DATA_DIR = Path("data")
-
-SEARCHED_FILE = DATA_DIR / "searched_pages.txt"
-FAILED_FILE = DATA_DIR / "failed_pages.txt"
-PAGES_FILE = DATA_DIR / "pages.jsonl"
-EDGES_FILE = DATA_DIR / "edges.csv"
-DISCOVERED_TITLES_FILE = DATA_DIR / "discovered_titles.txt"
+DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 # ---- Tuning ----
 EXPECTED_DISCOVERED_TOTAL = 72666
@@ -81,48 +87,6 @@ def get_json(params: dict, timeout: int = REQUEST_TIMEOUT, extra_sleep: float = 
     return response.json()
 
 
-def load_line_set(path: Path) -> set[str]:
-    if not path.exists():
-        return set()
-
-    with path.open("r", encoding="utf-8") as f:
-        return {line.strip() for line in f if line.strip()}
-
-
-def append_lines(path: Path, values: list[str]) -> None:
-    if not values:
-        return
-
-    with path.open("a", encoding="utf-8") as f:
-        for value in values:
-            f.write(value + "\n")
-
-
-def append_jsonl_many(path: Path, records: list[dict]) -> None:
-    if not records:
-        return
-
-    with path.open("a", encoding="utf-8") as f:
-        for record in records:
-            f.write(json.dumps(record, ensure_ascii=False) + "\n")
-
-
-def ensure_edges_file_header() -> None:
-    if not EDGES_FILE.exists() or EDGES_FILE.stat().st_size == 0:
-        with EDGES_FILE.open("w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=["source", "target"])
-            writer.writeheader()
-
-
-def append_edges_many(edges: list[dict]) -> None:
-    if not edges:
-        return
-
-    with EDGES_FILE.open("a", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=["source", "target"])
-        writer.writerows(edges)
-
-
 def format_seconds(seconds: float) -> str:
     seconds = max(0, int(seconds))
     hours, remainder = divmod(seconds, 3600)
@@ -138,14 +102,13 @@ def chunked(values: list[str], size: int):
         yield values[i:i + size]
 
 
+def page_url(title: str) -> str:
+    return f"{WIKI_PAGE_BASE_URL}{quote(title.replace(' ', '_'), safe='()')}"
+
+
 def should_refresh_discovered_titles(expected_total: int = EXPECTED_DISCOVERED_TOTAL) -> bool:
-    if not DISCOVERED_TITLES_FILE.exists():
-        return True
-
-    discovered_titles = load_line_set(DISCOVERED_TITLES_FILE)
-    discovered_count = len(discovered_titles)
-
-    print(f"Discovered titles on disk: {discovered_count}")
+    discovered_count = count_discovered_titles()
+    print(f"Discovered titles in DB: {discovered_count}")
     return discovered_count < expected_total
 
 
@@ -157,31 +120,37 @@ def get_all_pages() -> int:
         "aplimit": "500",
     }
 
-    seen_titles = load_line_set(DISCOVERED_TITLES_FILE)
+    seen_titles = load_discovered_title_set()
     new_titles_count = 0
+    skipped_titles_total = 0
 
     while True:
         data = get_json(params, extra_sleep=DISCOVERY_SLEEP_SECONDS)
 
         batch = data.get("query", {}).get("allpages", [])
         new_titles_buffer = []
+        skipped_titles_count = 0
 
         for page in batch:
             title = page["title"]
-
             if title in seen_titles:
+                skipped_titles_count += 1
                 continue
 
             seen_titles.add(title)
             new_titles_buffer.append(title)
 
         if new_titles_buffer:
-            append_lines(DISCOVERED_TITLES_FILE, new_titles_buffer)
+            insert_discovered_titles(new_titles_buffer)
             new_titles_count += len(new_titles_buffer)
+
+        skipped_titles_total += skipped_titles_count
 
         print(
             f"New titles found this refresh: {new_titles_count} | "
-            f"total discovered on disk: {len(seen_titles)}"
+            f"already known skipped this batch: {skipped_titles_count} | "
+            f"already known skipped this refresh: {skipped_titles_total} | "
+            f"total discovered in DB: {len(seen_titles)}"
         )
 
         if "continue" not in data:
@@ -193,10 +162,6 @@ def get_all_pages() -> int:
 
 
 def get_pages_links_and_categories_batch(titles: list[str]) -> list[dict]:
-    """
-    Fetch multiple titles in one API request sequence.
-    Returns one record per title.
-    """
     results = {
         title: {
             "page_title": title,
@@ -272,41 +237,30 @@ def fetch_batch(batch_titles: list[str]) -> list[dict]:
     return get_pages_links_and_categories_batch(batch_titles)
 
 
-def flush_buffers(
-    page_buffer: list[dict],
-    edge_buffer: list[dict],
-    searched_buffer: list[str],
-    failed_buffer: list[str],
-) -> None:
-    append_jsonl_many(PAGES_FILE, page_buffer)
-    append_edges_many(edge_buffer)
-    append_lines(SEARCHED_FILE, searched_buffer)
-    append_lines(FAILED_FILE, failed_buffer)
-
+def flush_page_records(page_buffer: list[dict]) -> None:
+    if not page_buffer:
+        return
+    store_crawl_results(page_buffer)
     page_buffer.clear()
-    edge_buffer.clear()
-    searched_buffer.clear()
-    failed_buffer.clear()
 
 
 def build_dataset(max_pages: int | None = None) -> None:
-    ensure_edges_file_header()
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    init_db()
 
     if should_refresh_discovered_titles():
         print("Refreshing discovered titles from API...")
         discovered_total = get_all_pages()
         print(f"Finished discovery refresh. Total discovered titles: {discovered_total}")
     else:
-        discovered_total = len(load_line_set(DISCOVERED_TITLES_FILE))
+        discovered_total = count_discovered_titles()
         print(
-            f"Skipping get_all_pages(): {DISCOVERED_TITLES_FILE} already has "
-            f"{discovered_total} titles."
+            "Skipping discovery refresh: DB already has "
+            f"{discovered_total} discovered titles."
         )
 
-    discovered_titles = sorted(load_line_set(DISCOVERED_TITLES_FILE))
-    searched_set = load_line_set(SEARCHED_FILE)
-    failed_set = load_line_set(FAILED_FILE)
+    discovered_titles = sorted(load_discovered_titles())
+    searched_set = load_searched_title_set()
+    failed_set = load_failed_title_set()
 
     pending_titles = [title for title in discovered_titles if title not in searched_set]
 
@@ -331,10 +285,7 @@ def build_dataset(max_pages: int | None = None) -> None:
     ok_count = 0
     error_count = 0
 
-    page_buffer = []
-    edge_buffer = []
-    searched_buffer = []
-    failed_buffer = []
+    page_buffer: list[dict] = []
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         future_to_batch = {
@@ -346,25 +297,21 @@ def build_dataset(max_pages: int | None = None) -> None:
             batch_results = future.result()
 
             for result in batch_results:
-                title = result["page_title"]
                 page_buffer.append(result)
 
                 if result["error"] is None:
                     ok_count += 1
-                    searched_buffer.append(title)
-
-                    for target in result["links_out"]:
-                        edge_buffer.append({
-                            "source": title,
-                            "target": target,
-                        })
                 else:
                     error_count += 1
-                    failed_buffer.append(title)
+                    print(
+                        f"[failed] {result['page_title']} | "
+                        f"url={page_url(result['page_title'])} | "
+                        f"error={result['error']}"
+                    )
 
                 done_pages += 1
 
-            if done_pages % 200 == 0:
+            if done_pages % 500 == 0:
                 elapsed = time.time() - started_at
                 avg = elapsed / done_pages if done_pages else 0
                 remaining = total - done_pages
@@ -377,9 +324,9 @@ def build_dataset(max_pages: int | None = None) -> None:
                 )
 
             if len(page_buffer) >= FLUSH_EVERY:
-                flush_buffers(page_buffer, edge_buffer, searched_buffer, failed_buffer)
+                flush_page_records(page_buffer)
 
-    flush_buffers(page_buffer, edge_buffer, searched_buffer, failed_buffer)
+    flush_page_records(page_buffer)
 
     total_elapsed = time.time() - started_at
     print(
