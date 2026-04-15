@@ -36,6 +36,17 @@ EDGE_ARROW_SPREAD_BASE = 4.0
 EDGE_SHARD_COUNT = 128
 
 
+# (gx1_max, gy1_max, gx2_max, gy2_max, color1, color2)
+EdgeRenderData = tuple[
+    float,
+    float,
+    float,
+    float,
+    tuple[int, int, int, int],
+    tuple[int, int, int, int],
+]
+
+
 def clamp(value: float, min_value: float, max_value: float) -> float:
     return max(min_value, min(max_value, value))
 
@@ -184,6 +195,28 @@ def draw_arrowhead_on_tile(
     draw.polygon([(x2, y2), left, right], fill=color)
 
 
+def precompute_node_global_pixels_at_zoom(
+    nodes: list[dict],
+    bounds: tuple[float, float, float, float],
+    zoom: int,
+) -> dict[str, tuple[float, float]]:
+    min_x, max_x, min_y, max_y = bounds
+    width = max(max_x - min_x, 1e-9)
+    height = max(max_y - min_y, 1e-9)
+    total_pixel_span = (2 ** zoom) * TILE_SIZE
+
+    node_pixels: dict[str, tuple[float, float]] = {}
+    for node in nodes:
+        nx = (node["x"] - min_x) / width
+        ny = 1.0 - ((node["y"] - min_y) / height)
+        node_pixels[node["page_title"]] = (
+            nx * total_pixel_span,
+            ny * total_pixel_span,
+        )
+
+    return node_pixels
+
+
 def build_node_tile_ops_at_zoom(
     nodes: list[dict],
     bounds: tuple[float, float, float, float],
@@ -195,9 +228,10 @@ def build_node_tile_ops_at_zoom(
 
     total_nodes = len(nodes)
     started_at = time.time()
+    node_pixels = precompute_node_global_pixels_at_zoom(nodes, bounds, zoom)
 
     for node_index, node in enumerate(nodes, start=1):
-        global_px, global_py = world_to_global_pixel(node["x"], node["y"], bounds, zoom)
+        global_px, global_py = node_pixels[node["page_title"]]
 
         color = hex_to_rgba(node["cluster_color"], 140)
         radius = max(1, int(max(1.0, node["node_size"] * (0.35 + 0.15 * zoom))))
@@ -206,8 +240,9 @@ def build_node_tile_ops_at_zoom(
         min_ty, max_ty = clip_tile_range(global_py - radius, global_py + radius, tiles_per_axis)
 
         for tx in range(min_tx, max_tx + 1):
+            tile_base_x = tx * TILE_SIZE
             for ty in range(min_ty, max_ty + 1):
-                local_x = global_px - tx * TILE_SIZE
+                local_x = global_px - tile_base_x
                 local_y = global_py - ty * TILE_SIZE
 
                 tile_node_ops.setdefault((tx, ty), []).append(
@@ -233,20 +268,21 @@ def merge_child_node_ops_to_parent(
     child_ops: dict[tuple[int, int], list[tuple]]
 ) -> dict[tuple[int, int], list[tuple]]:
     parent_ops: dict[tuple[int, int], list[tuple]] = {}
+    half_tile = TILE_SIZE / 2.0
 
     for (child_tx, child_ty), ops in child_ops.items():
         parent_tx = child_tx // 2
         parent_ty = child_ty // 2
 
-        offset_x = (child_tx % 2) * (TILE_SIZE / 2)
-        offset_y = (child_ty % 2) * (TILE_SIZE / 2)
+        offset_x = (child_tx % 2) * half_tile
+        offset_y = (child_ty % 2) * half_tile
 
         parent_list = parent_ops.setdefault((parent_tx, parent_ty), [])
 
         for local_x, local_y, radius, color in ops:
-            parent_local_x = offset_x + (local_x / 2.0)
-            parent_local_y = offset_y + (local_y / 2.0)
-            parent_radius = max(1, radius / 2.0)
+            parent_local_x = offset_x + (local_x * 0.5)
+            parent_local_y = offset_y + (local_y * 0.5)
+            parent_radius = max(1, radius * 0.5)
 
             parent_list.append(
                 (parent_local_x, parent_local_y, parent_radius, color)
@@ -445,19 +481,60 @@ def make_shard_paths(temp_zoom_dir: str, shard_count: int = EDGE_SHARD_COUNT) ->
     return [os.path.join(temp_zoom_dir, f"shard_{i:03d}.txt") for i in range(shard_count)]
 
 
-def build_edge_membership_temp_at_zoom(
+def precompute_edge_render_data(
     nodes: list[dict],
     edges: list[tuple[str, str]],
     bounds: tuple[float, float, float, float],
+    max_zoom: int,
+) -> tuple[list[EdgeRenderData | None], int]:
+    node_by_id = {n["page_title"]: n for n in nodes}
+    node_pixels_max_zoom = precompute_node_global_pixels_at_zoom(nodes, bounds, max_zoom)
+
+    edge_render_data: list[EdgeRenderData | None] = []
+    missing_edges = 0
+
+    total_edges = len(edges)
+    started_at = time.time()
+
+    for edge_index, (source, target) in enumerate(edges, start=1):
+        s = node_by_id.get(source)
+        t = node_by_id.get(target)
+        p1 = node_pixels_max_zoom.get(source)
+        p2 = node_pixels_max_zoom.get(target)
+
+        if not s or not t or p1 is None or p2 is None:
+            edge_render_data.append(None)
+            missing_edges += 1
+        else:
+            edge_alpha = edge_alpha_for_node_sizes(s["node_size"], t["node_size"])
+            c1 = hex_to_rgba(s["cluster_color"], edge_alpha)
+            c2 = hex_to_rgba(t["cluster_color"], edge_alpha)
+            edge_render_data.append((p1[0], p1[1], p2[0], p2[1], c1, c2))
+
+        if edge_index % 100000 == 0 or edge_index == total_edges:
+            elapsed = time.time() - started_at
+            rate = edge_index / elapsed if elapsed > 0 else 0.0
+            remaining = total_edges - edge_index
+            eta = remaining / rate if rate > 0 else 0.0
+            print(
+                f"[edge_render_data] {edge_index}/{total_edges} edges | "
+                f"missing {missing_edges} | elapsed {format_eta(elapsed)} | "
+                f"eta {format_eta(eta)}"
+            )
+
+    return edge_render_data, missing_edges
+
+
+def build_edge_membership_temp_at_zoom(
+    edge_render_data: list[EdgeRenderData | None],
     zoom: int,
     temp_zoom_dir: str,
     shard_count: int = EDGE_SHARD_COUNT,
 ) -> tuple[int, int]:
     tiles_per_axis = 2 ** zoom
-    node_by_id = {n["page_title"]: n for n in nodes}
     shard_paths = make_shard_paths(temp_zoom_dir, shard_count)
 
-    total_edges = len(edges)
+    total_edges = len(edge_render_data)
     total_memberships = 0
     started_at = time.time()
     touched_shards = set()
@@ -468,14 +545,11 @@ def build_edge_membership_temp_at_zoom(
             for path in shard_paths
         ]
 
-        for edge_index, (source, target) in enumerate(edges, start=1):
-            s = node_by_id.get(source)
-            t = node_by_id.get(target)
-            if not s or not t:
+        for edge_index, edge_data in enumerate(edge_render_data, start=1):
+            if edge_data is None:
                 continue
 
-            gx1, gy1 = world_to_global_pixel(s["x"], s["y"], bounds, zoom)
-            gx2, gy2 = world_to_global_pixel(t["x"], t["y"], bounds, zoom)
+            gx1, gy1, gx2, gy2, _, _ = edge_data
 
             seen_tiles = set()
             for tx, ty in iter_segment_tiles(gx1, gy1, gx2, gy2, tiles_per_axis):
@@ -508,31 +582,26 @@ def render_edge_tile_from_ids(
     edge_ids: list[int],
     tx: int,
     ty: int,
-    zoom: int,
-    edges: list[tuple[str, str]],
-    node_by_id: dict[str, dict],
-    bounds: tuple[float, float, float, float],
+    edge_render_data: list[EdgeRenderData | None],
+    coord_scale: float,
+    edge_width: int,
+    arrow_size: float,
+    arrow_spread: float,
 ) -> None:
-    for edge_id in edge_ids:
-        source, target = edges[edge_id]
+    tile_origin_x = tx * TILE_SIZE
+    tile_origin_y = ty * TILE_SIZE
 
-        s = node_by_id.get(source)
-        t = node_by_id.get(target)
-        if not s or not t:
+    for edge_id in edge_ids:
+        edge_data = edge_render_data[edge_id]
+        if edge_data is None:
             continue
 
-        gx1, gy1 = world_to_global_pixel(s["x"], s["y"], bounds, zoom)
-        gx2, gy2 = world_to_global_pixel(t["x"], t["y"], bounds, zoom)
+        gx1_max, gy1_max, gx2_max, gy2_max, c1, c2 = edge_data
 
-        local_x1 = gx1 - tx * TILE_SIZE
-        local_y1 = gy1 - ty * TILE_SIZE
-        local_x2 = gx2 - tx * TILE_SIZE
-        local_y2 = gy2 - ty * TILE_SIZE
-
-        edge_alpha = edge_alpha_for_node_sizes(s["node_size"], t["node_size"])
-        c1 = hex_to_rgba(s["cluster_color"], edge_alpha)
-        c2 = hex_to_rgba(t["cluster_color"], edge_alpha)
-        edge_width = max(1, int(round(EDGE_WIDTH_BASE + zoom * 0.12)))
+        local_x1 = (gx1_max * coord_scale) - tile_origin_x
+        local_y1 = (gy1_max * coord_scale) - tile_origin_y
+        local_x2 = (gx2_max * coord_scale) - tile_origin_x
+        local_y2 = (gy2_max * coord_scale) - tile_origin_y
 
         draw_gradient_line_on_tile(
             draw,
@@ -544,9 +613,6 @@ def render_edge_tile_from_ids(
             c2,
             width=edge_width,
         )
-
-        arrow_size = max(EDGE_ARROW_SIZE_BASE, edge_width * 4.0)
-        arrow_spread = max(EDGE_ARROW_SPREAD_BASE, edge_width * 2.2)
 
         draw_arrowhead_on_tile(
             draw,
@@ -562,12 +628,11 @@ def render_edge_tile_from_ids(
 
 def process_edge_zoom_from_temp(
     zoom: int,
+    max_zoom: int,
     temp_zoom_dir: str,
     next_temp_zoom_dir: str | None,
     output_dir: Path,
-    edges: list[tuple[str, str]],
-    node_by_id: dict[str, dict],
-    bounds: tuple[float, float, float, float],
+    edge_render_data: list[EdgeRenderData | None],
     rendered_tiles_so_far: int,
     total_tiles_hint: int | None,
     started_at: float,
@@ -579,6 +644,11 @@ def process_edge_zoom_from_temp(
     shard_paths = make_shard_paths(temp_zoom_dir, shard_count)
     parent_memberships_written = 0
     rendered_now = 0
+
+    coord_scale = 1.0 / (1 << (max_zoom - zoom))
+    edge_width = max(1, int(round(EDGE_WIDTH_BASE + zoom * 0.12)))
+    arrow_size = max(EDGE_ARROW_SIZE_BASE, edge_width * 4.0)
+    arrow_spread = max(EDGE_ARROW_SPREAD_BASE, edge_width * 2.2)
 
     parent_files = None
     if next_temp_zoom_dir is not None:
@@ -596,7 +666,7 @@ def process_edge_zoom_from_temp(
             if not os.path.exists(shard_path) or os.path.getsize(shard_path) == 0:
                 continue
 
-            tile_to_edge_ids: dict[tuple[int, int], list[int]] = defaultdict(list)
+            tile_to_edge_ids: dict[tuple[int, int], set[int]] = defaultdict(set)
 
             with open(shard_path, "r", encoding="utf-8") as f:
                 for line in f:
@@ -604,10 +674,14 @@ def process_edge_zoom_from_temp(
                     tx = int(tx_s)
                     ty = int(ty_s)
                     edge_id = int(edge_id_s)
-                    tile_to_edge_ids[(tx, ty)].append(edge_id)
+                    tile_to_edge_ids[(tx, ty)].add(edge_id)
 
-            for (tx, ty), ids in tile_to_edge_ids.items():
-                deduped_ids = list(dict.fromkeys(ids))
+            parent_tile_to_edge_ids: dict[tuple[int, int], set[int]] | None = None
+            if parent_files is not None:
+                parent_tile_to_edge_ids = defaultdict(set)
+
+            for (tx, ty), ids_set in tile_to_edge_ids.items():
+                deduped_ids = sorted(ids_set)
 
                 img = Image.new("RGBA", (TILE_SIZE, TILE_SIZE), EDGES_BACKGROUND)
                 draw = ImageDraw.Draw(img, "RGBA")
@@ -616,10 +690,11 @@ def process_edge_zoom_from_temp(
                     edge_ids=deduped_ids,
                     tx=tx,
                     ty=ty,
-                    zoom=zoom,
-                    edges=edges,
-                    node_by_id=node_by_id,
-                    bounds=bounds,
+                    edge_render_data=edge_render_data,
+                    coord_scale=coord_scale,
+                    edge_width=edge_width,
+                    arrow_size=arrow_size,
+                    arrow_spread=arrow_spread,
                 )
 
                 tile_dir = zoom_dir / str(tx)
@@ -629,14 +704,10 @@ def process_edge_zoom_from_temp(
                 rendered_now += 1
                 total_done = rendered_tiles_so_far + rendered_now
 
-                if parent_files is not None:
+                if parent_tile_to_edge_ids is not None:
                     parent_tx = tx // 2
                     parent_ty = ty // 2
-                    shard_idx = tile_shard_index(parent_tx, parent_ty, shard_count)
-                    pf = parent_files[shard_idx]
-                    for edge_id in deduped_ids:
-                        pf.write(f"{parent_tx}\t{parent_ty}\t{edge_id}\n")
-                        parent_memberships_written += 1
+                    parent_tile_to_edge_ids[(parent_tx, parent_ty)].update(deduped_ids)
 
                 if rendered_now % 100 == 0:
                     elapsed = time.time() - started_at
@@ -657,6 +728,14 @@ def process_edge_zoom_from_temp(
                         f"total {total_text} | elapsed {format_eta(elapsed)} | "
                         f"tiles/sec {rate:.2f}{extra}"
                     )
+
+            if parent_tile_to_edge_ids is not None and parent_files is not None:
+                for (parent_tx, parent_ty), edge_ids in parent_tile_to_edge_ids.items():
+                    shard_idx = tile_shard_index(parent_tx, parent_ty, shard_count)
+                    pf = parent_files[shard_idx]
+                    for edge_id in sorted(edge_ids):
+                        pf.write(f"{parent_tx}\t{parent_ty}\t{edge_id}\n")
+                        parent_memberships_written += 1
 
             os.remove(shard_path)
 
@@ -679,17 +758,26 @@ def render_edge_tiles(
 ) -> None:
     reset_output_dir(OUTPUT_DIR_EDGES)
 
-    node_by_id = {n["page_title"]: n for n in nodes}
     max_zoom = MAX_EDGE_TILE_ZOOM
+    print(f"Precomputing EDGE render data at max zoom z{max_zoom}...")
+    edge_render_data, missing_edges = precompute_edge_render_data(
+        nodes=nodes,
+        edges=edges,
+        bounds=bounds,
+        max_zoom=max_zoom,
+    )
+
+    print(
+        f"Prepared EDGE render data | total {len(edge_render_data)} | "
+        f"missing {missing_edges}"
+    )
 
     with tempfile.TemporaryDirectory(prefix="edge_tiles_") as temp_root:
         current_temp_dir = make_zoom_temp_dir(temp_root, max_zoom)
 
         print(f"Precomputing EDGE tile membership to temp files only at max zoom z{max_zoom}...")
         max_memberships, touched_shards = build_edge_membership_temp_at_zoom(
-            nodes=nodes,
-            edges=edges,
-            bounds=bounds,
+            edge_render_data=edge_render_data,
             zoom=max_zoom,
             temp_zoom_dir=current_temp_dir,
             shard_count=EDGE_SHARD_COUNT,
@@ -709,12 +797,11 @@ def render_edge_tiles(
             print(f"Rendering EDGE zoom z{zoom} from temp shards...")
             rendered_now, parent_memberships_written = process_edge_zoom_from_temp(
                 zoom=zoom,
+                max_zoom=max_zoom,
                 temp_zoom_dir=current_temp_dir,
                 next_temp_zoom_dir=next_temp_dir,
                 output_dir=OUTPUT_DIR_EDGES,
-                edges=edges,
-                node_by_id=node_by_id,
-                bounds=bounds,
+                edge_render_data=edge_render_data,
                 rendered_tiles_so_far=rendered_tiles_so_far,
                 total_tiles_hint=None,
                 started_at=started_at,
