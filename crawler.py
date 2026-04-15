@@ -8,6 +8,7 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+from canonicalize_duplicate_titles import run_migration
 from db import (
     init_db,
     count_discovered_titles,
@@ -102,6 +103,10 @@ def chunked(values: list[str], size: int):
         yield values[i:i + size]
 
 
+def normalize_title_key(title: str) -> str:
+    return " ".join((title or "").replace("_", " ").split()).casefold()
+
+
 def page_url(title: str) -> str:
     return f"{WIKI_PAGE_BASE_URL}{quote(title.replace(' ', '_'), safe='()')}"
 
@@ -173,6 +178,10 @@ def get_pages_links_and_categories_batch(titles: list[str]) -> list[dict]:
         }
         for title in titles
     }
+    requested_by_key = {
+        normalize_title_key(title): title
+        for title in titles
+    }
 
     params = {
         "action": "query",
@@ -186,22 +195,47 @@ def get_pages_links_and_categories_batch(titles: list[str]) -> list[dict]:
     try:
         while True:
             data = get_json(params, extra_sleep=PAGE_SLEEP_SECONDS)
-            pages = data.get("query", {}).get("pages", {})
+            query = data.get("query", {})
+            pages = query.get("pages", {})
+            normalized_to_requested = {
+                entry.get("to", ""): entry.get("from", "")
+                for entry in query.get("normalized", [])
+                if entry.get("to") and entry.get("from")
+            }
+            redirect_target_to_requested = {
+                entry.get("to", ""): entry.get("from", "")
+                for entry in query.get("redirects", [])
+                if entry.get("to") and entry.get("from")
+            }
 
             for page_data in pages.values():
-                title = page_data.get("title")
-                if not title or title not in results:
+                returned_title = page_data.get("title")
+                if not returned_title:
+                    continue
+
+                matched_title = results.get(returned_title, {}).get("page_title")
+                if matched_title is None:
+                    normalized_requested = normalized_to_requested.get(returned_title)
+                    if normalized_requested in results:
+                        matched_title = normalized_requested
+                if matched_title is None:
+                    redirect_requested = redirect_target_to_requested.get(returned_title)
+                    if redirect_requested in results:
+                        matched_title = redirect_requested
+                if matched_title is None:
+                    matched_title = requested_by_key.get(normalize_title_key(returned_title))
+                if matched_title is None:
                     continue
 
                 for link in page_data.get("links", []):
                     if link.get("ns") == 0:
-                        results[title]["links_out"].append(link["title"])
+                        results[matched_title]["links_out"].append(link["title"])
 
                 for cat in page_data.get("categories", []):
                     cat_title = cat["title"]
                     if cat_title.startswith("Category:"):
                         cat_title = cat_title[len("Category:"):]
-                    results[title]["categories"].append(cat_title)
+                    results[matched_title]["categories"].append(cat_title)
 
             if "continue" not in data:
                 break
@@ -327,6 +361,9 @@ def build_dataset(max_pages: int | None = None) -> None:
                 flush_page_records(page_buffer)
 
     flush_page_records(page_buffer)
+
+    print("Running duplicate-title canonicalization...")
+    run_migration()
 
     total_elapsed = time.time() - started_at
     print(

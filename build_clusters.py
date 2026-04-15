@@ -127,6 +127,54 @@ def choose_cluster_name_candidates(
     return ranked
 
 
+def prune_small_orphan_components_and_rerun(
+    g: ig.Graph,
+    cluster_seed: int,
+    max_orphan_component_size: int,
+) -> tuple[ig.Graph, ig.VertexClustering, int]:
+    total_removed = 0
+    iteration = 0
+
+    while True:
+        iteration += 1
+        print("Converting to undirected for clustering...")
+        ug = g.as_undirected(combine_edges="ignore")
+
+        orphan_vertex_indices = []
+        orphan_component_count = 0
+        for component in ug.connected_components():
+            if 0 < len(component) <= max_orphan_component_size:
+                orphan_component_count += 1
+                orphan_vertex_indices.extend(component)
+
+        if orphan_vertex_indices:
+            removed_now = len(orphan_vertex_indices)
+            total_removed += removed_now
+            print(
+                f"Pruning {removed_now} nodes from {orphan_component_count} "
+                f"orphan components with size <= {max_orphan_component_size}"
+            )
+            g.delete_vertices(sorted(orphan_vertex_indices, reverse=True))
+
+            if g.vcount() == 0:
+                empty_graph = ig.Graph(n=0, directed=True)
+                return empty_graph, ig.clustering.VertexClustering(empty_graph, []), total_removed
+
+            continue
+
+        ig.set_random_number_generator(random.Random(cluster_seed))
+        print(
+            f"Running Leiden clustering with seed={cluster_seed} "
+            f"(pass {iteration})..."
+        )
+        communities = ug.community_leiden(
+            objective_function="modularity",
+            resolution=3.5,
+        )
+
+        return g, communities, total_removed
+
+
 def build_clusters():
     init_db()
 
@@ -143,22 +191,22 @@ def build_clusters():
         f"elapsed {format_eta(elapsed)}"
     )
 
+    cluster_seed = int(os.environ.get("CLUSTER_SEED", DEFAULT_CLUSTER_SEED))
     print("Building graph...")
     g = build_igraph(nodes, edges)
 
-    print("Converting to undirected for clustering...")
-    ug = g.as_undirected(combine_edges="ignore")
-
-    cluster_seed = int(os.environ.get("CLUSTER_SEED", DEFAULT_CLUSTER_SEED))
-    ig.set_random_number_generator(random.Random(cluster_seed))
-
-    print(f"Running Leiden clustering with seed={cluster_seed}...")
     cluster_started_at = time.time()
-    communities = ug.community_leiden(
-        objective_function="modularity",
-        resolution=3.5,
+    g, communities, removed_nodes = prune_small_orphan_components_and_rerun(
+        g,
+        cluster_seed=cluster_seed,
+        max_orphan_component_size=2,
     )
     cluster_elapsed = time.time() - cluster_started_at
+
+    if g.vcount() == 0:
+        print("All nodes were removed while pruning tiny clusters.")
+        clear_cluster_and_layout_data()
+        return
 
     membership = communities.membership
     total_clusters = len(communities)
@@ -167,6 +215,7 @@ def build_clusters():
         f"Detected {total_clusters} clusters | "
         f"elapsed {format_eta(cluster_elapsed)}"
     )
+    print(f"Removed nodes from orphan components with size <= 2: {removed_nodes}")
 
     sizes = communities.sizes()
     if sizes:

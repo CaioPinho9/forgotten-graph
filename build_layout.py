@@ -531,8 +531,29 @@ def build_layout():
         f"elapsed {format_eta(elapsed)}"
     )
 
+    assigned_titles = set(cluster_assignments.keys())
+    filtered_edges = [
+        (source, target)
+        for source, target in edges
+        if source in assigned_titles and target in assigned_titles
+    ]
+    filtered_nodes = sorted({s for s, _ in filtered_edges} | {t for _, t in filtered_edges})
+
+    removed_nodes = len(nodes) - len(filtered_nodes)
+    removed_edges = len(edges) - len(filtered_edges)
+    if removed_nodes > 0 or removed_edges > 0:
+        LOGGER.line(
+            "Dropped unassigned graph items for layout: "
+            f"nodes={removed_nodes}, edges={removed_edges}"
+        )
+
+    if not filtered_nodes:
+        LOGGER.line("No assigned nodes with edges available for layout. Saving 0 layout rows.")
+        save_nodes_layout([])
+        return
+
     LOGGER.line("Building graph...")
-    g = build_igraph(nodes, edges)
+    g = build_igraph(filtered_nodes, filtered_edges)
 
     LOGGER.line("Computing layout...")
     coords = compute_clustered_layout(g, cluster_assignments)
