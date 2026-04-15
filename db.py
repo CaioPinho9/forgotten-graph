@@ -313,6 +313,130 @@ def load_node_adjacency(discovered_only: bool = True) -> dict[str, list[str]]:
     }
 
 
+def load_node_adjacency_payload(node_id: str) -> dict[str, Any] | None:
+    clean_node_id = (node_id or "").strip()
+    if not clean_node_id:
+        return None
+
+    with cursor() as (_, cur):
+        cur.execute(
+            """
+            SELECT l.target_title
+            FROM page_links l
+                     JOIN discovered_pages ds ON ds.page_title = l.source_title
+                     JOIN discovered_pages dt ON dt.page_title = l.target_title
+            WHERE l.source_title = ?
+            ORDER BY l.target_title
+            """,
+            (clean_node_id,),
+        )
+        out_neighbors = [row[0] for row in cur.fetchall()]
+
+        cur.execute(
+            """
+            SELECT l.source_title
+            FROM page_links l
+                     JOIN discovered_pages ds ON ds.page_title = l.source_title
+                     JOIN discovered_pages dt ON dt.page_title = l.target_title
+            WHERE l.target_title = ?
+            ORDER BY l.source_title
+            """,
+            (clean_node_id,),
+        )
+        in_neighbors = [row[0] for row in cur.fetchall()]
+
+        if not out_neighbors and not in_neighbors:
+            cur.execute(
+                "SELECT 1 FROM nodes_layout WHERE page_title = ? LIMIT 1",
+                (clean_node_id,),
+            )
+            if cur.fetchone() is None:
+                return None
+
+        neighbor_ids = sorted(set(out_neighbors) | set(in_neighbors))
+        if not neighbor_ids:
+            return {
+                "node_id": clean_node_id,
+                "neighbors": [],
+                "out": [],
+                "in": [],
+                "neighbor_nodes": [],
+                "out_nodes": [],
+                "in_nodes": [],
+            }
+
+        placeholders = ",".join("?" for _ in neighbor_ids)
+        cur.execute(
+            f"""
+            SELECT nl.page_title,
+                   nl.x,
+                   nl.y,
+                   nl.node_size,
+                   nl.cluster_color,
+                   nl.cluster_id,
+                   cc.cluster_name,
+                   nl.in_degree,
+                   nl.out_degree,
+                   COALESCE(
+                       (
+                           SELECT group_concat(pc.category_name, '||')
+                           FROM (
+                                    SELECT category_name
+                                    FROM page_categories
+                                    WHERE page_title = nl.page_title
+                                    ORDER BY category_name
+                                ) pc
+                       ),
+                       ''
+                   ) AS categories_concat
+            FROM nodes_layout nl
+                     LEFT JOIN cluster_colors cc ON cc.cluster_id = nl.cluster_id
+            WHERE nl.page_title IN ({placeholders})
+            """,
+            neighbor_ids,
+        )
+        rows = cur.fetchall()
+
+    node_payloads: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        categories = row[9].split("||") if row[9] else []
+        node_payloads[row[0]] = {
+            "id": row[0],
+            "x": float(row[1]),
+            "y": float(row[2]),
+            "size": float(row[3]),
+            "color": row[4],
+            "cluster_id": int(row[5]),
+            "cluster_name": row[6],
+            "in_degree": int(row[7]),
+            "out_degree": int(row[8]),
+            "categories": categories,
+            "label": row[0],
+        }
+
+    return {
+        "node_id": clean_node_id,
+        "neighbors": neighbor_ids,
+        "out": out_neighbors,
+        "in": in_neighbors,
+        "neighbor_nodes": [
+            node_payloads[neighbor_id]
+            for neighbor_id in neighbor_ids
+            if neighbor_id in node_payloads
+        ],
+        "out_nodes": [
+            node_payloads[neighbor_id]
+            for neighbor_id in out_neighbors
+            if neighbor_id in node_payloads
+        ],
+        "in_nodes": [
+            node_payloads[neighbor_id]
+            for neighbor_id in in_neighbors
+            if neighbor_id in node_payloads
+        ],
+    }
+
+
 def clear_cluster_and_layout_data() -> None:
     with cursor() as (_, cur):
         cur.execute("DELETE FROM cluster_assignments")
@@ -586,7 +710,7 @@ def load_edges_for_chunks(discovered_only: bool = True) -> list[tuple[str, str]]
 def load_nodes_edges_by_title(title: str) -> list[str]:
     with cursor() as (_, cur):
         cur.execute(
-            "SELECT target_title FROM page_links WHERE page_title = ?", (title,)
+            "SELECT target_title FROM page_links WHERE source_title = ?", (title,)
         )
 
-    return cur.fetchall()
+        return [row[0] for row in cur.fetchall()]

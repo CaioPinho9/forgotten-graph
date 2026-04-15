@@ -169,7 +169,7 @@ def prune_small_orphan_components_and_rerun(
         )
         communities = ug.community_leiden(
             objective_function="modularity",
-            resolution=3.5,
+            resolution=2,
         )
 
         return g, communities, total_removed

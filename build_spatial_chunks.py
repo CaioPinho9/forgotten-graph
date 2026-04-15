@@ -1,4 +1,3 @@
-import hashlib
 import json
 import shutil
 import time
@@ -8,8 +7,6 @@ from pathlib import Path
 from db import (
     init_db,
     load_cluster_metadata,
-    load_directed_node_adjacency,
-    load_node_adjacency,
     load_nodes_layout,
     load_page_categories,
 )
@@ -18,12 +15,11 @@ from zoom_config import load_zoom_config
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 OUTPUT_DIR = DATA_DIR / "graph_chunks"
-ADJACENCY_DIR = OUTPUT_DIR / "adjacency"
 SEARCH_INDEX_FILE = OUTPUT_DIR / "search_index.json"
 
 ZOOM_CONFIG = load_zoom_config()
-ZOOM_LEVELS = list(range(ZOOM_CONFIG["chunk_max_zoom"] + 1))
 INTERACTIVE_MIN_ZOOM = ZOOM_CONFIG["interactive_min_zoom"]
+ZOOM_LEVELS = list(range(INTERACTIVE_MIN_ZOOM, ZOOM_CONFIG["chunk_max_zoom"] + 1))
 LABEL_MIN_ZOOM = ZOOM_CONFIG["label_min_zoom"]
 
 
@@ -98,14 +94,9 @@ def reset_output_dir(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
 
 
-def node_file_token(node_id: str) -> str:
-    return hashlib.sha1(node_id.encode("utf-8")).hexdigest()
-
-
 def build_spatial_chunks():
     init_db()
     reset_output_dir(OUTPUT_DIR)
-    ensure_dir(ADJACENCY_DIR)
 
     print("Loading node layout from DB...")
     node_rows = load_nodes_layout()
@@ -119,11 +110,6 @@ def build_spatial_chunks():
     print("Loading cluster metadata from DB...")
     cluster_metadata = load_cluster_metadata()
     print(f"Loaded metadata for {len(cluster_metadata)} clusters")
-
-    print("Loading adjacency from DB...")
-    adjacency = load_node_adjacency(discovered_only=True)
-    directed_adjacency = load_directed_node_adjacency(discovered_only=True)
-    print(f"Adjacency entries: {len(adjacency)}")
 
     bounds = get_bounds(nodes)
     print(f"Bounds: {bounds}")
@@ -141,8 +127,8 @@ def build_spatial_chunks():
         "label_min_zoom": LABEL_MIN_ZOOM,
         "interactive_min_zoom": INTERACTIVE_MIN_ZOOM,
         "adjacency": {
-            "dir": "adjacency",
-            "format": "sha1(node_id).json",
+            "mode": "api",
+            "endpoint": "/api/adjacency?node_id={node_id}",
         },
     }
 
@@ -192,65 +178,6 @@ def build_spatial_chunks():
             f"[node_tiles] {zoom_index}/{total_node_zooms} zooms | "
             f"elapsed {format_eta(elapsed)} | eta {format_eta(eta)}"
         )
-
-    print("Writing adjacency files...")
-    adjacency_started_at = time.time()
-    items = sorted(adjacency.items())
-    total_items = len(items)
-
-    for index, (node_id, neighbors) in enumerate(items, start=1):
-        safe_name = node_file_token(node_id)
-        directed = directed_adjacency.get(node_id, {"out": [], "in": []})
-        out_neighbors = directed.get("out", [])
-        in_neighbors = directed.get("in", [])
-        payload = {
-            "node_id": node_id,
-            "neighbors": neighbors,
-            "out": out_neighbors,
-            "in": in_neighbors,
-            "neighbor_nodes": [
-                make_node_payload(
-                    nodes[neighbor_id],
-                    page_categories,
-                    cluster_metadata,
-                    include_label=True,
-                )
-                for neighbor_id in neighbors
-                if neighbor_id in nodes
-            ],
-            "out_nodes": [
-                make_node_payload(
-                    nodes[neighbor_id],
-                    page_categories,
-                    cluster_metadata,
-                    include_label=True,
-                )
-                for neighbor_id in out_neighbors
-                if neighbor_id in nodes
-            ],
-            "in_nodes": [
-                make_node_payload(
-                    nodes[neighbor_id],
-                    page_categories,
-                    cluster_metadata,
-                    include_label=True,
-                )
-                for neighbor_id in in_neighbors
-                if neighbor_id in nodes
-            ],
-        }
-        with (ADJACENCY_DIR / f"{safe_name}.json").open("w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=False)
-
-        if index % 5000 == 0 or index == total_items:
-            elapsed = time.time() - adjacency_started_at
-            rate = index / elapsed if elapsed > 0 else 0
-            remaining = total_items - index
-            eta = remaining / rate if rate > 0 else 0
-            print(
-                f"[adjacency] {index}/{total_items} files | "
-                f"elapsed {format_eta(elapsed)} | eta {format_eta(eta)}"
-            )
 
     print("Writing search index...")
     search_index = [

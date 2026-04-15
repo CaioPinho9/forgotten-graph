@@ -167,11 +167,15 @@
 <script>
     const TILE_SIZE = 1024;
     const NODE_RADIUS_SCALE = 1.0;
+    const DRAG_REFRESH_MS = 60;
+    const DRAG_TILE_PADDING = 2;
+    const EDGE_BLEND_RADIUS = 1;
+    const EDGE_BLEND_SIGMA = 0.85;
 
     const NODE_TILES_BASE = "./data/tiles_nodes";
     const EDGE_TILES_BASE = "./data/tiles_edges";
     const CHUNKS_BASE = "./data/graph_chunks";
-    const ADJACENCY_BASE = `${CHUNKS_BASE}/adjacency`;
+    const ADJACENCY_API = "/api/adjacency";
 
     const statusEl = document.getElementById("status");
     const coordsEl = document.getElementById("coords");
@@ -195,6 +199,7 @@
     let edgeTiles = null;
     let boundsInfo = null;
     let map = null;
+    let nodeRenderer = null;
 
     let preservedHighlightGraph = null; // { nodes: Map<string, object>, edges: Array<{source,target}> }
     let highlightedNodeId = null;
@@ -221,6 +226,7 @@
 
     let viewUpdateToken = 0;
     let viewUpdateFrame = null;
+    let dragRefreshTimer = null;
     let currentInteractiveZoom = null;
     let currentInteractiveTileKeys = new Set();
     let isMapDragging = false;
@@ -237,8 +243,124 @@
         return zoomConfig?.edge_tile_max_zoom ?? manifest?.zoom_config?.edge_tile_max_zoom ?? 7;
     }
 
+    function nearestAvailableZoom(targetZoom, availableZooms) {
+        if (!Array.isArray(availableZooms) || availableZooms.length === 0) return targetZoom;
+
+        let bestZoom = availableZooms[0];
+        let bestDistance = Math.abs(bestZoom - targetZoom);
+        for (let i = 1; i < availableZooms.length; i += 1) {
+            const candidate = availableZooms[i];
+            const distance = Math.abs(candidate - targetZoom);
+            if (distance < bestDistance) {
+                bestZoom = candidate;
+                bestDistance = distance;
+            }
+        }
+        return bestZoom;
+    }
+
+    function createEdgeTileLayer(leafletBounds) {
+        const group = L.layerGroup();
+        group._leafletBounds = leafletBounds;
+        group._zoomLayers = new Map();
+        group._activeZooms = new Set();
+        return group;
+    }
+
+    function createFixedEdgeTileLayer(leafletBounds, fixedZoom) {
+        const layer = L.tileLayer(`${EDGE_TILES_BASE}/${fixedZoom}/{x}/{y}.png`, {
+            tileSize: TILE_SIZE,
+            minZoom: 0,
+            minNativeZoom: fixedZoom,
+            maxNativeZoom: fixedZoom,
+            maxZoom: 10,
+            updateWhenIdle: false,
+            updateWhenZooming: true,
+            updateInterval: 16,
+            keepBuffer: 4,
+            noWrap: true,
+            bounds: leafletBounds,
+            opacity: 1.0,
+        });
+        layer._isReady = false;
+        layer.on("load", () => {
+            layer._isReady = true;
+            scheduleViewUpdate();
+        });
+        return layer;
+    }
+
+    function syncEdgeTileBlend() {
+        if (!map || !edgeTiles) return;
+
+        const maxEdgeZoom = Math.max(0, getEdgeTileMaxZoom());
+        const rawZoom = map.getZoom();
+        const clampedZoom = Math.max(0, Math.min(maxEdgeZoom, rawZoom));
+        const floorZoom = Math.floor(clampedZoom);
+        const bounds = edgeTiles._leafletBounds;
+        const neededZooms = new Set();
+
+        for (let z = floorZoom - EDGE_BLEND_RADIUS; z <= floorZoom + EDGE_BLEND_RADIUS + 1; z += 1) {
+            if (z < 0 || z > maxEdgeZoom) continue;
+            neededZooms.add(z);
+        }
+
+        for (const [z, layer] of Array.from(edgeTiles._zoomLayers.entries())) {
+            if (neededZooms.has(z)) continue;
+            if (!edgeTiles._activeZooms.has(z)) {
+                edgeTiles.removeLayer(layer);
+                edgeTiles._zoomLayers.delete(z);
+            }
+        }
+
+        const weights = new Map();
+        let weightSum = 0;
+        for (const z of neededZooms) {
+            const distance = Math.abs(z - clampedZoom);
+            const w = Math.exp(-(distance * distance) / (2 * EDGE_BLEND_SIGMA * EDGE_BLEND_SIGMA));
+            weights.set(z, w);
+            weightSum += w;
+        }
+
+        for (const z of neededZooms) {
+            let layer = edgeTiles._zoomLayers.get(z);
+            if (!layer) {
+                layer = createFixedEdgeTileLayer(bounds, z);
+                edgeTiles._zoomLayers.set(z, layer);
+                edgeTiles.addLayer(layer);
+                layer.setOpacity(0);
+            }
+        }
+
+        const activeZooms = Array.from(edgeTiles._activeZooms);
+        const hasActiveBlend = activeZooms.length > 0;
+        const allNeededReady = Array.from(neededZooms).every(z => edgeTiles._zoomLayers.get(z)?._isReady === true);
+
+        if (hasActiveBlend && !allNeededReady) {
+            return;
+        }
+
+        for (const [z, layer] of Array.from(edgeTiles._zoomLayers.entries())) {
+            if (neededZooms.has(z)) {
+                layer.setOpacity(weightSum > 0 ? weights.get(z) / weightSum : 0);
+            } else {
+                layer.setOpacity(0);
+                edgeTiles.removeLayer(layer);
+                edgeTiles._zoomLayers.delete(z);
+            }
+        }
+
+        edgeTiles._activeZooms = new Set(neededZooms);
+    }
+
     function getLabelMinZoom() {
         return zoomConfig?.label_min_zoom ?? manifest?.zoom_config?.label_min_zoom ?? manifest?.label_min_zoom ?? 7;
+    }
+
+    function nodeRadiusForZoom(nodeSize, zoomLevel) {
+        const z = Number.isFinite(zoomLevel) ? zoomLevel : getInteractiveMinZoom();
+        const zoomScale = Math.max(0.75, 0.55 + z * 0.11);
+        return Math.max(2.0, (nodeSize || 1.5) * NODE_RADIUS_SCALE * zoomScale);
     }
 
     function scheduleViewUpdate() {
@@ -246,12 +368,27 @@
 
         viewUpdateFrame = requestAnimationFrame(() => {
             viewUpdateFrame = null;
+            syncEdgeTileBlend();
             updateStaticTileVisibility();
+            refreshNodeStylesForZoom();
             updateVisibleData().catch(err => {
                 console.error(err);
                 setStatus(`Error updating view: ${err.message}`);
             });
         });
+    }
+
+    function startDragRefreshLoop() {
+        if (dragRefreshTimer !== null) return;
+        dragRefreshTimer = setInterval(() => {
+            scheduleViewUpdate();
+        }, DRAG_REFRESH_MS);
+    }
+
+    function stopDragRefreshLoop() {
+        if (dragRefreshTimer === null) return;
+        clearInterval(dragRefreshTimer);
+        dragRefreshTimer = null;
     }
 
     function setStatus(text) {
@@ -297,13 +434,6 @@
         const r = await fetch(path);
         if (!r.ok) throw new Error(`Failed to fetch ${path}`);
         return r.json();
-    }
-
-    async function sha1Hex(text) {
-        const data = new TextEncoder().encode(text);
-        const hashBuffer = await crypto.subtle.digest("SHA-1", data);
-        const hashArray = Array.from(new Uint8Array(hashBuffer));
-        return hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
     }
 
     function hexToRgb(hex) {
@@ -409,22 +539,13 @@
             scrollWheelZoom: true,
             wheelPxPerZoomLevel: 180,
         });
+        nodeRenderer = L.canvas({padding: 0.5});
 
         resetMapView(builtMap, bounds);
         builtMap.setMaxBounds(leafletBounds.pad(0.1));
 
-        edgeTiles = L.tileLayer(`${EDGE_TILES_BASE}/{z}/{x}/{y}.png`, {
-            tileSize: TILE_SIZE,
-            minZoom: 0,
-            maxNativeZoom: getEdgeTileMaxZoom(),
-            maxZoom: 10,
-            updateWhenIdle: false,
-            updateWhenZooming: true,
-            keepBuffer: 4,
-            noWrap: true,
-            bounds: leafletBounds,
-            opacity: 1.0,
-        });
+        edgeTiles = createEdgeTileLayer(leafletBounds);
+        syncEdgeTileBlend();
 
         nodeTiles = L.tileLayer(`${NODE_TILES_BASE}/{z}/{x}/{y}.png`, {
             tileSize: TILE_SIZE,
@@ -433,6 +554,7 @@
             maxZoom: getInteractiveMinZoom(),
             updateWhenIdle: false,
             updateWhenZooming: true,
+            updateInterval: 16,
             keepBuffer: 4,
             noWrap: true,
             bounds: leafletBounds,
@@ -456,10 +578,13 @@
         builtMap.on("zoomend", scheduleViewUpdate);
         builtMap.on("dragstart", () => {
             isMapDragging = true;
+            startDragRefreshLoop();
         });
         builtMap.on("dragend", () => {
+            stopDragRefreshLoop();
             requestAnimationFrame(() => {
                 isMapDragging = false;
+                scheduleViewUpdate();
             });
         });
         builtMap.on("click", e => {
@@ -497,6 +622,7 @@
         }
 
         if (edgesEnabled) {
+            syncEdgeTileBlend();
             if (!map.hasLayer(edgeTiles)) edgeTiles.addTo(map);
         } else if (map.hasLayer(edgeTiles)) {
             map.removeLayer(edgeTiles);
@@ -507,7 +633,7 @@
         return `${zoom}:${tx}:${ty}`;
     }
 
-    function getVisibleTiles(currentMap, zoom) {
+    function getVisibleTiles(currentMap, zoom, padding = 0) {
         const zInfo = manifest.zoom_levels[String(zoom)];
         if (!zInfo) return [];
 
@@ -528,10 +654,14 @@
             return Math.max(0, Math.min(tilesPerAxis - 1, Math.floor(ny * tilesPerAxis)));
         }
 
-        const txMin = toTX(b.getWest());
-        const txMax = toTX(b.getEast());
-        const tyMin = toTY(b.getNorth());
-        const tyMax = toTY(b.getSouth());
+        const rawTxMin = toTX(b.getWest());
+        const rawTxMax = toTX(b.getEast());
+        const rawTyMin = toTY(b.getNorth());
+        const rawTyMax = toTY(b.getSouth());
+        const txMin = Math.max(0, rawTxMin - padding);
+        const txMax = Math.min(tilesPerAxis - 1, rawTxMax + padding);
+        const tyMin = Math.max(0, rawTyMin - padding);
+        const tyMax = Math.min(tilesPerAxis - 1, rawTyMax + padding);
 
         const tiles = [];
         for (let tx = txMin; tx <= txMax; tx++) {
@@ -555,9 +685,10 @@
     }
 
     function makeNodeStyle(node, role = "default") {
+        const radius = nodeRadiusForZoom(node.size, map?.getZoom?.());
         if (role === "highlighted") {
             return {
-                radius: Math.max(1.5, node.size * NODE_RADIUS_SCALE),
+                radius,
                 color: "#ffffff",
                 fillColor: node.color,
                 fillOpacity: 1.0,
@@ -568,7 +699,7 @@
 
         if (role === "neighbor") {
             return {
-                radius: Math.max(1.5, node.size * NODE_RADIUS_SCALE),
+                radius,
                 color: "#ffffff",
                 fillColor: node.color,
                 fillOpacity: 0.9,
@@ -578,7 +709,7 @@
         }
 
         return {
-            radius: Math.max(1.5, node.size * NODE_RADIUS_SCALE),
+            radius,
             color: node.color,
             fillColor: node.color,
             fillOpacity: 0.8,
@@ -587,9 +718,23 @@
         };
     }
 
+    function refreshNodeStylesForZoom() {
+        for (const [, entry] of nodeIndex.entries()) {
+            entry.layer.setStyle(makeNodeStyle(entry.data, "default"));
+        }
+        for (const [id, entry] of highlightNodeIndex.entries()) {
+            const role = id === highlightedNodeId ? "highlighted" : "neighbor";
+            entry.layer.setStyle(makeNodeStyle(entry.data, role));
+        }
+    }
+
     function registerNodeLayer(index, layerGroup, node, role = "default") {
         const latlng = wll(node.x, node.y);
-        const circle = L.circleMarker(latlng, makeNodeStyle(node, role));
+        const style = makeNodeStyle(node, role);
+        const circle = L.circleMarker(latlng, {
+            ...style,
+            renderer: nodeRenderer || undefined,
+        });
 
         circle.on("click", async () => {
             const token = ++viewUpdateToken;
@@ -845,10 +990,9 @@
     }
 
     async function ensureHighlightedNeighborhood(nodeId, token) {
-        const fileToken = await sha1Hex(nodeId);
         if (token !== viewUpdateToken) return;
 
-        const payload = await fetchJson(`${ADJACENCY_BASE}/${fileToken}.json`).catch(() => null);
+        const payload = await fetchJson(`${ADJACENCY_API}?node_id=${encodeURIComponent(nodeId)}`).catch(() => null);
         if (token !== viewUpdateToken) return;
         if (!payload) return;
 
@@ -1134,7 +1278,10 @@
         const nodes = await req;
         if (!nodes) return;
 
-        if (zoom !== currentInteractiveZoom || !currentInteractiveTileKeys.has(key)) return;
+        if (zoom !== currentInteractiveZoom) return;
+        // While dragging, accept tiles from the current zoom even if viewport already shifted.
+        // They will be pruned when dragging ends and desired tiles are recalculated.
+        if (!isMapDragging && !currentInteractiveTileKeys.has(key)) return;
         if (loadedNodeTiles.has(key)) return;
 
         loadedNodeTiles.add(key);
@@ -1172,9 +1319,17 @@
         }
 
         const floorZ = Math.floor(rawZoom);
-        const available = Object.keys(manifest.zoom_levels).map(Number);
-        const chunkZoom = Math.max(Math.min(...available), Math.min(Math.max(...available), floorZ));
-        const tiles = getVisibleTiles(map, chunkZoom);
+        const available = Object.keys(manifest.zoom_levels)
+            .map(Number)
+            .filter(Number.isFinite)
+            .sort((a, b) => a - b);
+        if (available.length === 0) {
+            setStatus(`Zoom ${rawZoom.toFixed(2)}\nNo interactive zoom levels available`);
+            return;
+        }
+        const chunkZoom = nearestAvailableZoom(floorZ, available);
+        const tilePadding = isMapDragging ? DRAG_TILE_PADDING : 0;
+        const tiles = getVisibleTiles(map, chunkZoom, tilePadding);
         const desiredTileKeys = new Set(tiles.map(({tx, ty}) => tileKey(chunkZoom, tx, ty)));
 
         const zoomChanged = currentInteractiveZoom !== chunkZoom;
@@ -1185,14 +1340,15 @@
             clearVisibleInteractiveData();
             currentInteractiveZoom = chunkZoom;
             currentInteractiveTileKeys = desiredTileKeys;
-        } else {
+        } else if (!isMapDragging) {
             pruneHiddenTiles(desiredTileKeys);
         }
 
         setStatus(
             `Zoom ${rawZoom.toFixed(2)}\n` +
             `Chunk zoom: ${chunkZoom}\n` +
-            `Visible tiles: ${tiles.length}`
+            `Visible tiles: ${tiles.length}` +
+            (isMapDragging ? "\nLoading during drag..." : "")
         );
 
         for (const {tx, ty} of tiles) {

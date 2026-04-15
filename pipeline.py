@@ -12,7 +12,7 @@ def main():
 
     print("\nPipeline finished successfully.")
     print("Now serve this folder with:")
-    print("  python -m http.server 8000")
+    print("  python serve.py --port 8000")
     print("Then open:")
     print("  http://localhost:8000/viewer.html")
 

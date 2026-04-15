@@ -2,3 +2,7 @@
 graph_chunks
 .venv
 data
+__pycache__
+.idea
+*.csv
+*.log
