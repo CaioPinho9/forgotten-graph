@@ -156,7 +156,7 @@ def build_clusters():
     cluster_started_at = time.time()
     communities = ug.community_leiden(
         objective_function="modularity",
-        resolution=2,
+        resolution=3.5,
     )
     cluster_elapsed = time.time() - cluster_started_at
 
