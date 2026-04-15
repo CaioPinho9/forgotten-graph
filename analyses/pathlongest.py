@@ -175,7 +175,7 @@ reverse_adjacency = {title: [] for title in page_titles}
 for source, target in page_edges:
     reverse_adjacency[target].append(source)
 
-TARGET_ENDS = ["1567 DR"]
+TARGET_ENDS = ["1567 DR", "1570 DR"]
 
 
 def find_longest_incoming_path(end_node: str, iterations: int = 1000):
@@ -216,7 +216,7 @@ def find_longest_incoming_path(end_node: str, iterations: int = 1000):
 
 if __name__ == "__main__":
     workers = len(TARGET_ENDS)  # One process per target node
-    iterations = int(os.environ.get("PATHLONGEST_ITERATIONS", "100000"))
+    iterations = int(os.environ.get("PATHLONGEST_ITERATIONS", "10000000"))
 
     if not os.path.exists(PATHLONGEST_RESULTS_CSV):
         with open(PATHLONGEST_RESULTS_CSV, "w", newline="") as f:

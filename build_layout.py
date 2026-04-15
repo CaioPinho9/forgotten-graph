@@ -233,7 +233,7 @@ def compute_clustered_layout(g: ig.Graph, cluster_assignments: dict[str, dict]) 
         except Exception:
             coarse_layout = cg.layout_fruchterman_reingold()
         coarse_coords = coarse_layout.coords
-        coarse_coords = [(x * 125, y * 125) for x, y in coarse_coords]
+        coarse_coords = [(x * 180, y * 180) for x, y in coarse_coords]
     else:
         coarse_coords = [(float(i), 0.0) for i in range(len(community_ids))]
     LOGGER.line(f"Community layout done | elapsed {format_eta(time.time() - coarse_started_at)}")
@@ -467,7 +467,7 @@ def compute_clustered_layout(g: ig.Graph, cluster_assignments: dict[str, dict]) 
                 layout_progress_end=((completed_cost + cost) / total_cost) if total_cost else 1.0,
             )
 
-            spread = max(120.0, math.sqrt(size) * 60.0)
+            spread = min(500.0, max(80.0, math.sqrt(size) * 25.0))
 
             for local_i, node_idx in enumerate(node_indices):
                 lx, ly = local_coords[local_i]

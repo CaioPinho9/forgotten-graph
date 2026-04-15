@@ -5,7 +5,7 @@ from build_tiles import build_tiles
 
 
 def main():
-    build_clusters()
+    # build_clusters()
     build_layout()
     build_spatial_chunks()
     build_tiles()

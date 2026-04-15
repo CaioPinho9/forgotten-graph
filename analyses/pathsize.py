@@ -92,12 +92,6 @@ if not os.path.exists(PATHSIZE_CSV):
         writer = csv.writer(file)
         writer.writerow(["start", "end", "path_length", "path"])
 
-if not os.path.exists(LONGEST_PATHSIZE_CSV):
-    with open(LONGEST_PATHSIZE_CSV, "w", newline="") as file:
-        writer = csv.writer(file)
-        writer.writerow(["start", "farthest_end", "path_length", "path"])
-
-
 while True:
     search = deque()
     discovered = set()
@@ -111,7 +105,6 @@ while True:
 
     print(f"Finding path from {start_node_title} to {end_node_title}...")
 
-    found_node = None
     farthest_node = start_node
 
     while search:
@@ -119,8 +112,19 @@ while True:
 
         # Save the first occurrence of the target.
         # In BFS, the first time we find it is the shortest path.
-        if current_node.title == end_node_title and found_node is None:
-            found_node = current_node
+        if current_node.title == end_node_title:
+            path = build_path(current_node)
+            path_titles = [node.title for node in path]
+            steps = current_node.depth
+
+            print("Target path:")
+            print(" -> ".join(path_titles))
+            print(f"Found path from {start_node_title} to {end_node_title} in {steps} steps!")
+
+            with open(PATHSIZE_CSV, "a", newline="") as file:
+                writer = csv.writer(file)
+                writer.writerow([start_node_title, end_node_title, steps, " -> ".join(path_titles)])
+            break
 
         # Keep tracking the deepest node even after finding the target
         if current_node.depth > farthest_node.depth:
@@ -138,43 +142,8 @@ while True:
                     )
                 )
 
-    # Save path to requested target
-    if found_node is not None:
-        path = build_path(found_node)
-        path_titles = [node.title for node in path]
-        steps = found_node.depth
+    print(f"No path found from {start_node_title} to {end_node_title}")
 
-        print("Target path:")
-        print(" -> ".join(path_titles))
-        print(f"Found path from {start_node_title} to {end_node_title} in {steps} steps!")
-
-        with open(PATHSIZE_CSV, "a", newline="") as file:
-            writer = csv.writer(file)
-            writer.writerow([start_node_title, end_node_title, steps, " -> ".join(path_titles)])
-    else:
-        print(f"No path found from {start_node_title} to {end_node_title}")
-
-        with open(PATHSIZE_CSV, "a", newline="") as file:
-            writer = csv.writer(file)
-            writer.writerow([start_node_title, end_node_title, -1, "NOT FOUND"])
-
-    # Save longest reachable path from this same start node
-    longest_path = build_path(farthest_node)
-    longest_path_titles = [node.title for node in longest_path]
-    longest_steps = farthest_node.depth
-
-    print("Longest reachable path from start:")
-    print(" -> ".join(longest_path_titles))
-    print(
-        f"Longest reachable path from {start_node_title} ends at "
-        f"{farthest_node.title} in {longest_steps} steps!"
-    )
-
-    with open(LONGEST_PATHSIZE_CSV, "a", newline="") as file:
+    with open(PATHSIZE_CSV, "a", newline="") as file:
         writer = csv.writer(file)
-        writer.writerow([
-            start_node_title,
-            farthest_node.title,
-            longest_steps,
-            " -> ".join(longest_path_titles),
-        ])
+        writer.writerow([start_node_title, end_node_title, -1, "NOT FOUND"])

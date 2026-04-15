@@ -837,7 +837,7 @@ def build_tiles():
 
     bounds = get_bounds(nodes)
 
-    render_node_tiles(nodes, bounds)
+    # render_node_tiles(nodes, bounds)
     render_edge_tiles(nodes, edges, bounds)
 
 
